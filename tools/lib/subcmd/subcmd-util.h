@@ -49,17 +49,27 @@ static NORETURN inline void die(const char *err, ...)
 
 static inline void *xrealloc(void *ptr, size_t size)
 {
-	void *ret = realloc(ptr, size);
-	if (!ret && !size)
-		ret = realloc(ptr, 1);
-	if (!ret) {
-		ret = realloc(ptr, size);
-		if (!ret && !size)
-			ret = realloc(ptr, 1);
-		if (!ret)
-			die("Out of memory, realloc failed");
-	}
-	return ret;
+	void *ret;
+
+    /*
+     * Convert a zero-sized allocation into 1 byte, since
+     * realloc(ptr, 0) means free(ptr), but we don't want
+     * to release the memory. For a new allocation (when
+     * ptr == NULL), avoid triggering NULL-checking error
+     * conditions for zero-sized allocations.
+     */
+    if (!size)
+        size = 1;
+    ret = realloc(ptr, size);
+    if (!ret) {
+        /*
+         * If realloc() fails, the original block is left untouched;
+         * it is not freed or moved.
+         */
+        die("Out of memory, realloc failed");
+    }
+    return ret;
+
 }
 
 #define astrcatf(out, fmt, ...)						\
