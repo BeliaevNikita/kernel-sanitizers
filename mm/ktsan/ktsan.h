@@ -32,7 +32,10 @@
 #define KT_SYNC_TAB_SIZE 196613
 #define KT_MEMBLOCK_TAB_SIZE 196613
 
-#define KT_MAX_SYNC_COUNT (1700 * 1000)
+//#define KT_MAX_SYNC_COUNT (1700 * 1000)
+//MY KT_MAX_SYNC_COUNT to reduce memory consumtion (works on 6gb RAM qemu)
+#define KT_MAX_SYNC_COUNT (300 * 1000)
+
 #define KT_MAX_MEMBLOCK_COUNT (200 * 1000)
 #define KT_MAX_PERCPU_SYNC_COUNT (30 * 1000)
 
