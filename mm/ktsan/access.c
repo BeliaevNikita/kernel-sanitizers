@@ -6,6 +6,7 @@
 #include <linux/mm.h>
 #include <linux/printk.h>
 #include <linux/sched.h>
+#include <linux/bitmap.h>
 
 //MY CODE
 static __always_inline kt_shadow_t *get_shadow_slots(uptr_t addr)
@@ -88,6 +89,25 @@ static void dump_shadow_by_address(uptr_t addr)
     }
 }
 
+atomic64_t kt_max_shadow_clock = ATOMIC64_INIT(0);
+EXPORT_SYMBOL(kt_max_shadow_clock);
+
+DECLARE_BITMAP(kt_test_tids, KT_MAX_THREAD_COUNT);
+EXPORT_SYMBOL(kt_test_tids);
+
+static __always_inline void kt_update_max_shadow_clock(kt_time_t clock)
+{
+	s64 old = atomic64_read(&kt_max_shadow_clock);
+
+	while ((s64)clock > old) {
+		s64 prev = atomic64_cmpxchg(&kt_max_shadow_clock, old, clock);
+
+		if (prev == old)
+			break;
+		old = prev;
+	}
+}
+
 atomic64_t kt_total_accesses = ATOMIC64_INIT(0);
 EXPORT_SYMBOL(kt_total_accesses); 
 atomic64_t kt_total_accesses_old = ATOMIC64_INIT(0);
@@ -163,9 +183,11 @@ static __always_inline bool update_one_shadow_slot(kt_thr_t *thr, uptr_t addr,
 
 	raw = kt_atomic64_load_no_ktsan(slot);
 	if (raw == 0) {
-		if (!stored)
+		if (!stored) {
 			kt_atomic64_store_no_ktsan(slot,
 						   KT_SHADOW_TO_LONG(value));
+			kt_update_max_shadow_clock(value.clock);
+		}
 		return true;
 	}
 	old = *(kt_shadow_t *)&raw;
@@ -220,9 +242,11 @@ static __always_inline bool update_one_shadow_slot(kt_thr_t *thr, uptr_t addr,
 		
 		/* Happens-before? */
 		if (likely(kt_clk_get(&thr->clk, old.tid) >= old.clock)) {
-			if (!stored)
+			if (!stored) {
 				kt_atomic64_store_no_ktsan(
 					slot, KT_SHADOW_TO_LONG(value));
+				kt_update_max_shadow_clock(value.clock);
+			}
 			return true;
 		}
                 /*
@@ -279,6 +303,7 @@ static __always_inline void kt_access_impl(kt_thr_t *thr, kt_shadow_t *slots,
 	atomic64_inc(&kt_total_accesses_from_all);
 
         if (is_ktsan_tracked(thr->pid)) {
+			set_bit(thr->id, kt_test_tids);
             atomic64_inc(&kt_total_accesses);
         }
         //if (ktsan_target_pid != -1 && ktsan_target_pid == thr->pid) {
@@ -309,6 +334,7 @@ static __always_inline void kt_access_impl(kt_thr_t *thr, kt_shadow_t *slots,
 		kt_atomic64_store_no_ktsan(
 			&slots[current_clock % KT_SHADOW_SLOTS],
 			KT_SHADOW_TO_LONG(value));
+		kt_update_max_shadow_clock(value.clock);
 	}
 }
 
@@ -404,8 +430,11 @@ void kt_access_range_imitate(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
 	value.atomic = false;
 
 	for (; size; size -= KT_GRAIN) {
-		for (i = 0; i < KT_SHADOW_SLOTS; i++, slots++)
+		for (i = 0; i < KT_SHADOW_SLOTS; i++, slots++) {
 			kt_atomic64_store_no_ktsan(
 				slots, i ? 0 : KT_SHADOW_TO_LONG(value));
+			if (i == 0)
+				kt_update_max_shadow_clock(value.clock);
+		}
 	}
 }

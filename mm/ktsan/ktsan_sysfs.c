@@ -3,6 +3,8 @@
 #include <linux/sysfs.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
+#include <linux/bitmap.h>
+#include "ktsan.h"
 
 #define MAX_PIDS 512
 
@@ -20,8 +22,35 @@ extern atomic64_t kt_total_accesses_from_all;
 extern atomic64_t kt_total_conflict_pairs_1_tracked;
 extern atomic64_t kt_total_conflict_pairs_unordered_1_tracked;
 extern atomic64_t kt_total_unique_races;
+extern atomic64_t kt_max_shadow_clock;
+extern unsigned long kt_test_tids[];
 
 extern void kt_reset_race_reporting(void);
+
+static void print_and_reset_test_tids(void)
+{
+	char buf[256];
+	int offset = 0;
+	int tid;
+	bool any = false;
+
+	offset += scnprintf(buf + offset, sizeof(buf) - offset,
+			    "kt_test_tids:");
+	for (tid = 0; tid < KT_MAX_THREAD_COUNT; tid++) {
+		if (!test_bit(tid, kt_test_tids))
+			continue;
+		any = true;
+		if (offset > sizeof(buf) - 16) {
+			pr_info("%s\n", buf);
+			offset = scnprintf(buf, sizeof(buf), "kt_test_tids:");
+		}
+		offset += scnprintf(buf + offset, sizeof(buf) - offset, " %d", tid);
+	}
+	if (!any)
+		offset += scnprintf(buf + offset, sizeof(buf) - offset, " none");
+	pr_info("%s\n", buf);
+	bitmap_zero(kt_test_tids, KT_MAX_THREAD_COUNT);
+}
 
 // Сброс счетчиков
 static void reset_ktsan_counters(void)
@@ -33,8 +62,11 @@ static void reset_ktsan_counters(void)
     pr_info("kt_total_conflict_pairs_1_tracked: %lld\n", atomic64_read(&kt_total_conflict_pairs_1_tracked));
     pr_info("kt_total_conflict_pairs_unordered_1_tracked: %lld\n", atomic64_read(&kt_total_conflict_pairs_unordered_1_tracked));
     pr_info("kt_total_unique_races: %lld\n", atomic64_read(&kt_total_unique_races));
+    pr_info("kt_max_shadow_clock: %lld\n", atomic64_read(&kt_max_shadow_clock));
+    print_and_reset_test_tids();
     atomic64_set(&kt_total_accesses, 0);
     atomic64_set(&kt_total_unique_races, 0);
+    atomic64_set(&kt_max_shadow_clock, 0);
     atomic64_set(&kt_total_conflict_pairs, 0);
     atomic64_set(&kt_total_conflict_pairs_unordered, 0);
     atomic64_set(&kt_total_accesses_from_all, 0);
