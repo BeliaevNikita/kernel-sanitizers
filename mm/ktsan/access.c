@@ -165,7 +165,8 @@ static __always_inline bool ranges_intersect(int first_offset, int first_size,
 	return true;
 }
 
-static __always_inline bool update_one_shadow_slot(kt_thr_t *thr, uptr_t addr,
+static __always_inline bool update_one_shadow_slot(kt_thr_t *thr, uptr_t pc,
+						   uptr_t addr,
 						   kt_shadow_t *slot,
 						   kt_shadow_t value,
 						   bool stored)
@@ -176,7 +177,7 @@ static __always_inline bool update_one_shadow_slot(kt_thr_t *thr, uptr_t addr,
     
 #if PID_FILTER
 	// Игнорируем доступы неотслеживаемых пидов, чтобы теневая память не засорялась
-	if (!is_ktsan_tracked(value.tid)) {
+	if (!is_ktsan_tracked(kt_thr_get(value.tid)->pid)) {
 		return true;
 	}
 #endif
@@ -226,10 +227,10 @@ static __always_inline bool update_one_shadow_slot(kt_thr_t *thr, uptr_t addr,
                 
 		//MY CODE
 		// В kt_access_impl используем функцию is_ktsan_tracked:
-			if (is_ktsan_tracked(old.tid) || is_ktsan_tracked(value.tid)) {
+			if (is_ktsan_tracked(kt_thr_get(old.tid)->pid) || is_ktsan_tracked(kt_thr_get(value.tid)->pid)) {
 				atomic64_inc(&kt_total_conflict_pairs_1_tracked);
 			}
-			if (is_ktsan_tracked(old.tid) && is_ktsan_tracked(value.tid)) {
+			if (is_ktsan_tracked(kt_thr_get(old.tid)->pid) && is_ktsan_tracked(kt_thr_get(value.tid)->pid)) {
 				atomic64_inc(&kt_total_conflict_pairs);
 				//pr_info("Old tid: %u, Value tid: %u\n", old.tid, value.tid);
 				// dump_shadow_by_address(addr);
@@ -255,10 +256,10 @@ static __always_inline bool update_one_shadow_slot(kt_thr_t *thr, uptr_t addr,
 		if (likely(old.atomic && value.atomic))
 			return false;
 		*/
-		if (is_ktsan_tracked(old.tid) || is_ktsan_tracked(value.tid)) {
+		if (is_ktsan_tracked(kt_thr_get(old.tid)->pid) || is_ktsan_tracked(kt_thr_get(value.tid)->pid)) {
 			atomic64_inc(&kt_total_conflict_pairs_unordered_1_tracked);
 		}
-		if (is_ktsan_tracked(old.tid) && is_ktsan_tracked(value.tid)) {
+		if (is_ktsan_tracked(kt_thr_get(old.tid)->pid) && is_ktsan_tracked(kt_thr_get(value.tid)->pid)) {
 			atomic64_inc(&kt_total_conflict_pairs_unordered);
 			// pr_info("Race: old.tid=%d thr->tid=%d value.tid=%d addr=0x%lx\n", old.tid, thr->pid,
 			// 		value.tid, addr);
@@ -282,6 +283,13 @@ static __always_inline bool update_one_shadow_slot(kt_thr_t *thr, uptr_t addr,
 		info.addr = addr;
 		info.old = old;
 		info.new = value;
+		/* RACE HUNTER: shared-memory access event is the point where
+		 * Race Hunter creates new watchpoint targets from a conflicting
+		 * KTSAN shadow pair.
+		 */
+		kt_rh_shared_mem_access(thr, pc, addr, 1UL << value.size,
+					value.read, value.atomic, old,
+					(int)(value.clock - old.clock));
 		kt_report_race(thr, &info);
 
 		return true;
@@ -290,7 +298,8 @@ static __always_inline bool update_one_shadow_slot(kt_thr_t *thr, uptr_t addr,
 	return false;
 }
 
-static __always_inline void kt_access_impl(kt_thr_t *thr, kt_shadow_t *slots,
+static __always_inline void kt_access_impl(kt_thr_t *thr, uptr_t pc,
+					   kt_shadow_t *slots,
 					   kt_time_t current_clock, uptr_t addr,
 					   size_t size, bool read, bool atomic)
 {
@@ -320,10 +329,14 @@ static __always_inline void kt_access_impl(kt_thr_t *thr, kt_shadow_t *slots,
 	value.size = size;
 	value.read = read;
 	value.atomic = atomic;
+	/* RACE HUNTER: pc is a compact shadow-side key. The full pc should be
+	 * stored in the Race Hunter pc ring when that bridge is enabled.
+	 */
+	value.pc = current_clock & ((1UL << RH_KT_PC_BITS) - 1);
 
 	stored = false;
 	for (i = 0; i < KT_SHADOW_SLOTS; i++)
-		stored |= update_one_shadow_slot(thr, addr, &slots[i], value,
+		stored |= update_one_shadow_slot(thr, pc, addr, &slots[i], value,
 						 stored);
 
 	/*pr_err("thread: %d, addr: %lx, size: %u, read: %d, stored: %d\n",
@@ -357,8 +370,11 @@ void kt_access(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size, bool read,
 
 	kt_trace_add_event(thr, kt_event_mop, kt_compress(pc));
 	current_clock = kt_clk_get(&thr->clk, thr->id);
+	/* RACE HUNTER: regular memory access event. */
+	kt_rh_mem_access(thr, pc, addr, 1UL << size, read, atomic,
+			 KT_RH_ACCESS_REGULAR);
 
-	kt_access_impl(thr, slots, current_clock, addr, size, read, atomic);
+	kt_access_impl(thr, pc, slots, current_clock, addr, size, read, atomic);
 }
 
 void kt_access_range(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
@@ -377,25 +393,30 @@ void kt_access_range(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
 
 	kt_trace_add_event(thr, kt_event_mop, kt_compress(pc));
 	current_clock = kt_clk_get(&thr->clk, thr->id);
+	/* RACE HUNTER: one logical range access event, while KTSAN still updates
+	 * shadow memory per grain below.
+	 */
+	kt_rh_mem_access(thr, pc, addr, size, read, false,
+			 KT_RH_ACCESS_REGULAR);
 
 	/* Handle unaligned beginning, if any. */
 	if (addr & (KT_GRAIN - 1)) {
 		for (; (addr & (KT_GRAIN - 1)) && size; addr++, size--)
-			kt_access_impl(thr, slots, current_clock, addr,
+			kt_access_impl(thr, pc, slots, current_clock, addr,
 				       KT_ACCESS_SIZE_1, read, false);
 		slots += KT_SHADOW_SLOTS;
 	}
 
 	/* Handle middle part, if any. */
 	for (; size >= KT_GRAIN; addr += KT_GRAIN, size -= KT_GRAIN) {
-		kt_access_impl(thr, slots, current_clock, addr,
+		kt_access_impl(thr, pc, slots, current_clock, addr,
 			       KT_ACCESS_SIZE_8, read, false);
 		slots += KT_SHADOW_SLOTS;
 	}
 
 	/* Handle ending, if any. */
 	for (; size; addr++, size--)
-		kt_access_impl(thr, slots, current_clock, addr,
+		kt_access_impl(thr, pc, slots, current_clock, addr,
 			       KT_ACCESS_SIZE_1, read, false);
 }
 
@@ -418,6 +439,9 @@ void kt_access_range_imitate(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
 
 	kt_trace_add_event(thr, kt_event_mop, kt_compress(pc));
 	current_clock = kt_clk_get(&thr->clk, thr->id);
+	/* RACE HUNTER: imitated access event for allocation/reset-like writes. */
+	kt_rh_mem_access(thr, pc, addr, size, read, false,
+			 KT_RH_ACCESS_IMITATE);
 
 	/* Below we assume that access size 8 covers whole grain. */
 	BUG_ON(KT_GRAIN != (1 << KT_ACCESS_SIZE_8));
@@ -428,6 +452,8 @@ void kt_access_range_imitate(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
 	value.size = KT_ACCESS_SIZE_8;
 	value.read = read;
 	value.atomic = false;
+	/* RACE HUNTER: pc-ring index placeholder. */
+	value.pc = current_clock & ((1UL << RH_KT_PC_BITS) - 1);
 
 	for (; size; size -= KT_GRAIN) {
 		for (i = 0; i < KT_SHADOW_SLOTS; i++, slots++) {
