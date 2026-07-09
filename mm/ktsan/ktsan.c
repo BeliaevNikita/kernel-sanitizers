@@ -99,6 +99,12 @@ void __init ktsan_init_early(void)
 {
 	kt_ctx_t *ctx = &kt_ctx;
 
+	/* RACE HUNTER: validate the new shadow bit layout at build time. */
+	BUILD_BUG_ON(sizeof(kt_shadow_t) != sizeof(unsigned long));
+	BUILD_BUG_ON(KT_MAX_THREAD_COUNT > (1UL << RH_KT_THREAD_ID_BITS));
+	BUILD_BUG_ON(RH_KT_THREAD_ID_BITS + RH_KT_CLOCK_BITS + 3 + 2 + 1 + 1 +
+		     RH_KT_PC_BITS != BITS_PER_LONG);
+
 	memset(ctx, 0, sizeof(*ctx));
 	kt_tab_init(&ctx->sync_tab, KT_SYNC_TAB_SIZE, sizeof(kt_tab_sync_t),
 		    KT_MAX_SYNC_COUNT);
@@ -113,6 +119,12 @@ void __init ktsan_init_early(void)
 	kt_thr_pool_init();
 
 	kt_stack_depot_init(&ctx->stack_depot);
+	/* RACE HUNTER: keep the bridge disabled until the adapted runtime is
+	 * linked, but initialize the fields explicitly for readability.
+	 */
+	ctx->smc_algorithm = NULL;
+	ctx->smc_enabled = KT_ENABLE_RACE_HUNTER;
+	kt_rh_init();
 }
 
 static void ktsan_report_memory_usage(void)
@@ -315,6 +327,10 @@ void ktsan_task_create(struct ktsan_task_s *new, int pid)
 	ENTER(KT_ENTER_SCHED | KT_ENTER_DISABLED);
 	new->task = kt_cache_alloc(&kt_ctx.task_cache);
 	new->task->thr = kt_thr_create(thr, pid);
+	/* RACE HUNTER: expose KTSAN task creation as ThreadCreateEvent with a
+	 * real creation pc from the public KTSAN hook.
+	 */
+	kt_rh_thread_create(thr, new->task->thr, pc);
 	new->task->running = false;
 	LEAVE();
 }

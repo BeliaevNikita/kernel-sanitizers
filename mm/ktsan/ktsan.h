@@ -11,11 +11,15 @@
 #include <linux/mm_types.h>
 #include <linux/mm.h>
 
-#define KT_DEBUG 0
+//MY CODE
+#define KT_DEBUG 1
+//#define KT_DEBUG 0
+
 #define KT_DEBUG_TRACE 0
 #define KT_ENABLE_STATS 0
 
 #define KT_GRAIN 8
+// #define KT_SHADOW_SLOTS_LOG 4
 #define KT_SHADOW_SLOTS_LOG 2
 #define KT_SHADOW_SLOTS (1 << KT_SHADOW_SLOTS_LOG)
 #define KT_SHADOW_TO_LONG(shadow) (*(long *)(&shadow))
@@ -28,6 +32,26 @@
 
 #define KT_THREAD_ID_BITS 12
 #define KT_CLOCK_BITS 42
+
+/* RACE HUNTER: disabled by default to keep old KTSAN runtime unchanged. */
+#define KT_ENABLE_RACE_HUNTER 0
+
+/* OLD KTSAN:
+ * #define KT_THREAD_ID_BITS 12
+ * #define KT_CLOCK_BITS 42
+ */
+
+/* NEW RACE HUNTER DEFINITION */
+#define RH_KT_THREAD_ID_BITS 10
+#define RH_KT_CLOCK_BITS 30
+#define RH_KT_PC_BITS 17
+
+/* RACE HUNTER: mirrors enum smc_access_type without forcing a dependency on
+ * c_smc_event.h while the bridge is disabled.
+ */
+#define KT_RH_ACCESS_REGULAR 0
+#define KT_RH_ACCESS_IMITATE 1
+#define KT_RH_ACCESS_RESET 2
 
 #define KT_SYNC_TAB_SIZE 196613
 #define KT_MEMBLOCK_TAB_SIZE 196613
@@ -99,6 +123,13 @@ typedef struct kt_shadow_s kt_shadow_t;
 typedef struct kt_percpu_sync_s kt_percpu_sync_t;
 typedef struct kt_spinlock_s kt_spinlock_t;
 typedef struct kt_interrupted_s kt_interrupted_t;
+
+/* RACE HUNTER: forward declarations keep KTSAN independent from the adapted
+ * implementation while the new runtime objects are still being ported.
+ */
+struct smc_algorithm;
+struct smc_thread_handle;
+struct smc_event;
 
 /* Ktsan runtime internal, non-instrumented spinlock. */
 
@@ -216,6 +247,7 @@ struct kt_clk_s {
 
 /* Shadow. */
 
+/* OLD KTSAN:
 struct kt_shadow_s {
 	unsigned long tid : KT_THREAD_ID_BITS;
 	unsigned long clock : KT_CLOCK_BITS;
@@ -223,6 +255,18 @@ struct kt_shadow_s {
 	unsigned long size : 2;
 	unsigned long read : 1;
 	unsigned long atomic : 1;
+};
+*/
+
+/* NEW RACE HUNTER DEFINITION */
+struct kt_shadow_s {
+	unsigned long tid : RH_KT_THREAD_ID_BITS;
+	unsigned long clock : RH_KT_CLOCK_BITS;
+	unsigned long offset : 3;
+	unsigned long size : 2;
+	unsigned long read : 1;
+	unsigned long atomic : 1;
+	unsigned long pc : RH_KT_PC_BITS;
 };
 
 /* Reports. */
@@ -316,6 +360,14 @@ struct kt_thr_s {
 	kt_time_t last_event_disable_time;
 	kt_time_t last_event_enable_time;
 #endif
+	/* OLD KTSAN:
+	 * No Race Hunter per-thread state was stored in kt_thr_s.
+	 */
+
+	/* NEW RACE HUNTER DEFINITION */
+	struct smc_thread_handle *smc_handle;
+	void *smc_local_state;
+	int smc_inside;
 };
 
 /* Holds state of an interrupted thread while it executes interrupts.
@@ -419,6 +471,13 @@ struct kt_ctx_s {
 	kt_thr_pool_t thr_pool;
 	kt_stack_depot_t stack_depot;
 	u64 sync_uid_gen;
+	/* OLD KTSAN:
+	 * No Race Hunter global algorithm state was stored in kt_ctx_s.
+	 */
+
+	/* NEW RACE HUNTER DEFINITION */
+	struct smc_algorithm *smc_algorithm;
+	int smc_enabled;
 };
 
 extern kt_ctx_t kt_ctx;
@@ -443,6 +502,44 @@ static inline void kt_stat_dec(kt_stat_t what)
 {
 	kt_stat_add(what, -1);
 }
+
+/* RACE HUNTER: event bridge. When KT_ENABLE_RACE_HUNTER is 0 these helpers are
+ * compiled away, so the original KTSAN path keeps its old behaviour and does
+ * not require the adapted Race Hunter implementation at link time.
+ */
+#if KT_ENABLE_RACE_HUNTER
+void kt_rh_init(void);
+void kt_rh_thread_create(kt_thr_t *parent, kt_thr_t *child, uptr_t pc);
+void kt_rh_thread_start(kt_thr_t *thr, uptr_t pc);
+void kt_rh_thread_finish(kt_thr_t *thr, uptr_t pc);
+void kt_rh_function_entry(kt_thr_t *thr, uptr_t pc);
+void kt_rh_function_exit(kt_thr_t *thr);
+void kt_rh_fence(kt_thr_t *thr, uptr_t pc);
+void kt_rh_prelock(kt_thr_t *thr, uptr_t pc);
+void kt_rh_mem_access(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
+		      bool read, bool atomic, int typ);
+void kt_rh_shared_mem_access(kt_thr_t *thr, uptr_t cur_pc, uptr_t addr,
+			     size_t size, bool read, bool atomic,
+			     kt_shadow_t old, int epoch_diff);
+#else
+static inline void kt_rh_init(void) {}
+static inline void kt_rh_thread_create(kt_thr_t *parent, kt_thr_t *child,
+				       uptr_t pc) {}
+static inline void kt_rh_thread_start(kt_thr_t *thr, uptr_t pc) {}
+static inline void kt_rh_thread_finish(kt_thr_t *thr, uptr_t pc) {}
+static inline void kt_rh_function_entry(kt_thr_t *thr, uptr_t pc) {}
+static inline void kt_rh_function_exit(kt_thr_t *thr) {}
+static inline void kt_rh_fence(kt_thr_t *thr, uptr_t pc) {}
+static inline void kt_rh_prelock(kt_thr_t *thr, uptr_t pc) {}
+static inline void kt_rh_mem_access(kt_thr_t *thr, uptr_t pc, uptr_t addr,
+				    size_t size, bool read, bool atomic,
+				    int typ) {}
+static inline void kt_rh_shared_mem_access(kt_thr_t *thr, uptr_t cur_pc,
+					   uptr_t addr, size_t size,
+					   bool read, bool atomic,
+					   kt_shadow_t old,
+					   int epoch_diff) {}
+#endif
 
 /* Stack. */
 
