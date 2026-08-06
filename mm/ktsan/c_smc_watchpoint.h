@@ -15,6 +15,7 @@
 #include "c_smc_analysis.h"
 #include "c_smc_data.h"
 #include "c_smc_event.h"
+#include "c_smc_watchpoint_targets.h"
 
 #define SMC_CONFIG_NUM_WATCHPOINTS 5
 #define SMC_WATCHPOINT_SHIFT_ADDR 8
@@ -49,19 +50,19 @@ struct smc_wp_statistics {
 	struct smc_thread_safe_timer *shared_inner_transfer_timer;
 };
 
-struct smc_intrusion_info {
-	smc_uptr_t pc;
-	struct smc_compatible_state *info;
-};
-
 struct smc_watchpoint {
-	atomic_long_t addr;
+	unsigned long addr;
 	smc_uptr_t size;
+	smc_uptr_t pc;
+	u32 owner_id;
+	unsigned long owner_epoch;
+	u32 life;
 	bool is_read;
 	bool is_atomic;
 };
 
 struct smc_watchpoint_local_state {
+	struct smc_local_state base;
 	struct smc_local_state *inner;
 	int skip_watch;
 	int skip_count;
@@ -78,10 +79,12 @@ struct smc_other_info {
 };
 
 struct smc_watchpoint_global_state {
+	struct smc_global_state base;
 	struct smc_global_state *inner;
 	struct smc_watchpoint watchpoints[SMC_CONFIG_NUM_WATCHPOINTS];
 	struct smc_other_info other_info[SMC_CONFIG_NUM_WATCHPOINTS];
-	struct smc_mutex *report_lock;
+	u8 slot_locks[SMC_CONFIG_NUM_WATCHPOINTS];
+	u8 report_lock;
 };
 
 struct smc_watchpoint_wait_action {
@@ -95,16 +98,23 @@ struct smc_watchpoint_wait_action {
 };
 
 struct smc_watchpoint_analysis {
+	struct smc_dynamic_analysis base;
 	struct smc_dynamic_analysis *inner;
 	int timeout;
 	bool is_random;
 	int fitness_limit;
 	bool first_access_only;
+	unsigned int intrusion_list_limit;
+	bool enable_interesting_check;
 	bool intrusion_collect;
 	bool composite_intrusion_collect;
 	bool weak_mem;
 	struct smc_wp_statistics stats;
+	struct smc_watchpoint_global_state global_state;
 };
+
+int smc_watchpoint_an_init(struct smc_watchpoint_analysis *analysis);
+void smc_watchpoint_an_destroy(struct smc_dynamic_analysis *analysis);
 
 void smc_init_watchpoint_thread_locals(void);
 
@@ -164,38 +174,40 @@ bool smc_watchpoint_wait_action_post_wait(
 void smc_watchpoint_wait_action_cancel(
 	struct smc_watchpoint_wait_action *action);
 
-struct smc_target *smc_watchpoint_analysis_get_initial_target(
-	struct smc_watchpoint_analysis *analysis);
-struct smc_local_state *smc_watchpoint_analysis_get_initial_local_state(
-	struct smc_watchpoint_analysis *analysis);
-struct smc_global_state *smc_watchpoint_analysis_get_initial_global_state(
-	struct smc_watchpoint_analysis *analysis);
-struct smc_wait_action *smc_watchpoint_analysis_transfer(
-	struct smc_watchpoint_analysis *analysis,
+struct smc_target *smc_watchpoint_an_get_initial_target(
+	struct smc_dynamic_analysis *analysis);
+struct smc_local_state *smc_watchpoint_an_get_initial_local_state(
+	struct smc_dynamic_analysis *analysis, struct smc_thread_handle *handle);
+struct smc_global_state *smc_watchpoint_an_get_initial_global_state(
+	struct smc_dynamic_analysis *analysis);
+struct smc_wait_action *smc_watchpoint_an_transfer(
+	struct smc_dynamic_analysis *analysis,
 	struct smc_thread_handle *handle, const struct smc_event *event,
 	const struct smc_target *target, struct smc_local_state *local_state,
 	struct smc_global_state *global_state);
-struct smc_ilist *smc_watchpoint_analysis_get_new_targets(
-	struct smc_watchpoint_analysis *analysis,
+struct smc_ilist *smc_watchpoint_an_get_new_targets(
+	struct smc_dynamic_analysis *analysis,
 	struct smc_thread_handle *handle, const struct smc_target *target,
 	const struct smc_event *event, struct smc_local_state *local_state,
 	struct smc_global_state *global_state);
-bool smc_watchpoint_analysis_fast_is_related(
-	const struct smc_watchpoint_analysis *analysis,
-	enum smc_target_type target_type, enum smc_event_type event_type);
-struct smc_target *smc_watchpoint_analysis_get_current_target(
+bool smc_watchpoint_an_fast_is_related(
+	const struct smc_dynamic_analysis *analysis,
+	enum smc_event_type event_type);
+struct smc_target *smc_watchpoint_an_get_current_target(
 	struct smc_watchpoint_analysis *analysis, const struct smc_target *target,
 	struct smc_local_state *local_state,
 	struct smc_global_state *global_state);
-struct smc_watchpoint_analysis *smc_watchpoint_analysis_create(
+struct smc_watchpoint_analysis *smc_watchpoint_an_create(
 	struct smc_dynamic_analysis *inner);
-void smc_watchpoint_analysis_print_statistics(
-	struct smc_watchpoint_analysis *analysis, bool total);
-void smc_watchpoint_analysis_start_iteration(
-	struct smc_watchpoint_analysis *analysis,
+void smc_watchpoint_an_print_statistics(
+	const struct smc_dynamic_analysis *analysis, bool total);
+void smc_watchpoint_an_reset_statistics(
+	struct smc_watchpoint_analysis *analysis);
+void smc_watchpoint_an_start_iteration(
+	struct smc_dynamic_analysis *analysis,
 	struct smc_global_state *global_state, const struct smc_target *target);
-void smc_watchpoint_analysis_finish_iteration(
-	struct smc_watchpoint_analysis *analysis,
+void smc_watchpoint_an_finish_iteration(
+	struct smc_dynamic_analysis *analysis,
 	struct smc_global_state *global_state, struct smc_target *target);
 
 #endif /* C_SMC_WATCHPOINT_H */
