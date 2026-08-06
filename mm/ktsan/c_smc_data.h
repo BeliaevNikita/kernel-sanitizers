@@ -7,6 +7,17 @@
 #include <linux/string.h>
 #include <linux/types.h>
 
+/*
+ * These containers are used by the KTSAN runtime itself and are protected by
+ * the SMC runtime lock.  list_empty() expands to READ_ONCE(), which is routed
+ * through ktsan_atomic64_load() in this tree and would recursively re-enter
+ * RaceHunter.  A plain load is the correct primitive while holding that lock.
+ */
+static inline bool smc_list_empty(const struct list_head *head)
+{
+	return head->next == head;
+}
+
 typedef unsigned long smc_uptr_t;
 
 typedef bool (*smc_data_equal_fn)(const void *a, const void *b);
@@ -120,7 +131,7 @@ static inline bool smc_ilist_pop_front(struct smc_ilist *list, void *out)
 {
 	struct smc_ilist_node *node;
 
-	if (list_empty(&list->head))
+	if (smc_list_empty(&list->head))
 		return false;
 
 	node = list_first_entry(&list->head, struct smc_ilist_node, node);
@@ -137,7 +148,7 @@ static inline bool smc_ilist_pop_back(struct smc_ilist *list, void *out)
 {
 	struct smc_ilist_node *node;
 
-	if (list_empty(&list->head))
+	if (smc_list_empty(&list->head))
 		return false;
 
 	node = list_last_entry(&list->head, struct smc_ilist_node, node);
@@ -201,7 +212,7 @@ static inline smc_uptr_t smc_ilist_size(const struct smc_ilist *list)
 
 static inline bool smc_ilist_empty(const struct smc_ilist *list)
 {
-	return list_empty(&list->head);
+	return smc_list_empty(&list->head);
 }
 
 static inline struct smc_ilist_iter
@@ -210,7 +221,7 @@ smc_ilist_begin(struct smc_ilist *list)
 	struct smc_ilist_iter iter;
 
 	iter.list = list;
-	iter.pos = list_empty(&list->head) ? NULL :
+	iter.pos = smc_list_empty(&list->head) ? NULL :
 		list_first_entry(&list->head, struct smc_ilist_node, node);
 	return iter;
 }
@@ -231,7 +242,7 @@ smc_ilist_cbegin(const struct smc_ilist *list)
 	struct smc_ilist_const_iter iter;
 
 	iter.list = list;
-	iter.pos = list_empty(&list->head) ? NULL :
+	iter.pos = smc_list_empty(&list->head) ? NULL :
 		list_first_entry(&list->head, struct smc_ilist_node, node);
 	return iter;
 }
@@ -300,7 +311,7 @@ static inline void smc_ilist_iter_prev(struct smc_ilist_iter *iter)
 	struct list_head *prev;
 
 	if (!iter->pos) {
-		iter->pos = list_empty(&iter->list->head) ? NULL :
+		iter->pos = smc_list_empty(&iter->list->head) ? NULL :
 			list_last_entry(&iter->list->head,
 					struct smc_ilist_node, node);
 		return;
