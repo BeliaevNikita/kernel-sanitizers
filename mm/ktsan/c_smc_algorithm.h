@@ -2,6 +2,7 @@
 #define C_SMC_ALGORITHM_H
 
 #include <linux/types.h>
+#include <linux/atomic.h>
 
 #include "c_smc_analysis.h"
 #include "c_smc_waitlist.h"
@@ -28,6 +29,7 @@ struct smc_bitmap_pair {
 
 struct smc_dynamic_algorithm {
 	int restart_count;
+	u32 iteration_generation;
 	int prep_iterations;
 	struct smc_dynamic_analysis *analysis;
 	struct smc_global_state *global_state;
@@ -35,6 +37,8 @@ struct smc_dynamic_algorithm {
 	struct smc_target *target;
 	enum smc_target_type target_type;
 	struct smc_reached_set *reached;
+	struct smc_waitlist *waitlist;
+	u8 event_lock;
 	struct smc_coverage coverage;
 	int reached_targets;
 	int feasible_targets;
@@ -70,57 +74,57 @@ struct smc_algorithm {
 	union smc_algorithm_data data;
 };
 
-void smc_init_algorithm_thread_locals(void);
+void smc_init_alg_thread_locals(void);
 
-void smc_algorithm_on_event(struct smc_algorithm *algorithm,
+void smc_alg_on_event(struct smc_algorithm *algorithm,
 			    const struct smc_event *event,
 			    struct smc_thread_handle *handle);
-bool smc_algorithm_on_finalize(struct smc_algorithm *algorithm);
+bool smc_alg_on_finalize(struct smc_algorithm *algorithm);
 
-void smc_dynamic_algorithm_init(struct smc_dynamic_algorithm *algorithm,
+void smc_dyn_alg_init(struct smc_dynamic_algorithm *algorithm,
 				struct smc_dynamic_analysis *analysis);
-void smc_dynamic_algorithm_destroy(struct smc_dynamic_algorithm *algorithm);
-void smc_dynamic_algorithm_init_thread_local(
+void smc_dyn_alg_destroy(struct smc_dynamic_algorithm *algorithm);
+void smc_dyn_alg_init_thread_local(
 	struct smc_dynamic_algorithm *algorithm);
-void smc_dynamic_algorithm_restart_thread_data(
+void smc_dyn_alg_restart_thread_data(
 	struct smc_dynamic_algorithm *algorithm);
-bool smc_dynamic_algorithm_restart(struct smc_dynamic_algorithm *algorithm,
+bool smc_dyn_alg_restart(struct smc_dynamic_algorithm *algorithm,
 				   struct smc_thread_handle *handle);
-void smc_dynamic_algorithm_start_iteration(
+void smc_dyn_alg_start_iteration(
 	struct smc_dynamic_algorithm *algorithm);
-void smc_dynamic_algorithm_finish_iteration(
+void smc_dyn_alg_finish_iteration(
 	struct smc_dynamic_algorithm *algorithm,
 	struct smc_thread_handle *handle);
-size_t smc_dynamic_algorithm_mutate_target(
+size_t smc_dyn_alg_mutate_target(
 	struct smc_dynamic_algorithm *algorithm, unsigned char *data,
 	size_t size, size_t max_size, smc_mutation_state_t state,
 	struct smc_thread_handle *handle);
-smc_mutation_state_t smc_dynamic_algorithm_pop_target_successors(
+smc_mutation_state_t smc_dyn_alg_pop_target_successors(
 	struct smc_dynamic_algorithm *algorithm);
-size_t smc_dynamic_algorithm_get_initial_target_as_binary_data(
+size_t smc_dyn_alg_get_initial_target_as_binary_data(
 	struct smc_dynamic_algorithm *algorithm, unsigned char *data,
 	size_t size);
-void smc_dynamic_algorithm_on_event(struct smc_dynamic_algorithm *algorithm,
+void smc_dyn_alg_on_event(struct smc_dynamic_algorithm *algorithm,
 				    const struct smc_event *event,
 				    struct smc_thread_handle *handle);
-bool smc_dynamic_algorithm_on_finalize(
+bool smc_dyn_alg_on_finalize(
 	struct smc_dynamic_algorithm *algorithm);
 
-void smc_dynamic_algorithm_print_statistics(
+void smc_dyn_alg_print_statistics(
 	struct smc_dynamic_algorithm *algorithm, bool total);
-bool smc_dynamic_algorithm_should_break(
+bool smc_dyn_alg_should_break(
 	struct smc_dynamic_algorithm *algorithm, struct smc_target *target);
-void smc_dynamic_algorithm_dump_target(
+void smc_dyn_alg_dump_target(
 	struct smc_dynamic_algorithm *algorithm, struct smc_target *target);
-struct smc_target *smc_dynamic_algorithm_read_target_from_file(
+struct smc_target *smc_dyn_alg_read_target_from_file(
 	struct smc_dynamic_algorithm *algorithm, const char *name);
-bool smc_dynamic_algorithm_save_coverage_info(
+bool smc_dyn_alg_save_coverage_info(
 	struct smc_dynamic_algorithm *algorithm, struct smc_target *target);
-void smc_dynamic_algorithm_add_to_coverage(
+void smc_dyn_alg_add_to_coverage(
 	struct smc_dynamic_algorithm *algorithm, const struct smc_event *event);
-void smc_dynamic_algorithm_set_next_target(
+void smc_dyn_alg_set_next_target(
 	struct smc_dynamic_algorithm *algorithm, struct smc_target *target);
-void smc_dynamic_algorithm_reset_current_coverage(
+void smc_dyn_alg_reset_current_coverage(
 	struct smc_dynamic_algorithm *algorithm);
 
 #endif /* C_SMC_ALGORITHM_H */
