@@ -10,6 +10,25 @@
 
 struct file;
 struct smc_thread_handle;
+struct smc_dynamic_analysis;
+struct smc_target;
+struct smc_local_state;
+struct smc_global_state;
+struct smc_compatible_state;
+struct smc_wait_action;
+
+struct smc_target_ops {
+	bool (*is_related)(const struct smc_target *target,
+			   const struct smc_event *event);
+	bool (*equals)(const struct smc_target *target,
+		       const struct smc_target *other);
+	bool (*merge)(struct smc_target *target,
+		      const struct smc_target *other);
+	struct smc_target *(*copy)(const struct smc_target *target, gfp_t gfp);
+	bool (*is_feasible)(const struct smc_target *target);
+	void (*print)(const struct smc_target *target);
+	void (*destroy)(struct smc_target *target);
+};
 
 #define SMC_SERIALIZER_BUFFER_MAX_SIZE (1U << 12)
 #define SMC_MAX_FITNESS 1147483647
@@ -57,6 +76,7 @@ enum smc_global_state_type {
 
 struct smc_global_state {
 	enum smc_global_state_type type;
+	bool heap_allocated;
 };
 
 enum smc_local_state_type {
@@ -80,8 +100,22 @@ enum smc_compatible_state_type {
 	SMC_CALLSTACK_COMPATIBLE_STATE_TYPE,
 };
 
+struct smc_compatible_state_ops {
+	bool (*equals)(const struct smc_compatible_state *state,
+		       const struct smc_compatible_state *other);
+	bool (*compatible)(const struct smc_compatible_state *state,
+			   const struct smc_compatible_state *other);
+	bool (*is_related)(const struct smc_compatible_state *state,
+			   const struct smc_event *event);
+	bool (*is_interesting)(const struct smc_compatible_state *state);
+	struct smc_compatible_state *(*copy)(
+		const struct smc_compatible_state *state, gfp_t gfp);
+	void (*destroy)(struct smc_compatible_state *state);
+};
+
 struct smc_compatible_state {
 	enum smc_compatible_state_type type;
+	const struct smc_compatible_state_ops *ops;
 };
 
 struct smc_local_state {
@@ -103,12 +137,14 @@ enum smc_target_type {
 
 struct smc_target {
 	enum smc_target_type type;
+	const struct smc_target_ops *ops;
 	struct list_head new_targets_list;
 	int fitness;
 	int raw_fitness;
 	bool explored;
 	bool reached;
 	bool request_stop;
+	unsigned int events;
 	atomic_t progress_counter;
 };
 
@@ -137,6 +173,39 @@ enum smc_dynamic_analysis_type {
 
 struct smc_dynamic_analysis {
 	enum smc_dynamic_analysis_type type;
+	int (*init)(struct smc_dynamic_analysis *analysis);
+	void (*destroy)(struct smc_dynamic_analysis *analysis);
+	struct smc_target *(*get_initial_target)(
+		struct smc_dynamic_analysis *analysis);
+	struct smc_local_state *(*get_initial_local_state)(
+		struct smc_dynamic_analysis *analysis,
+		struct smc_thread_handle *handle);
+	struct smc_global_state *(*get_initial_global_state)(
+		struct smc_dynamic_analysis *analysis);
+	bool (*local_transfer)(const struct smc_dynamic_analysis *analysis,
+		const struct smc_event *event,
+		struct smc_local_state *local_state);
+	struct smc_wait_action *(*transfer)(
+		struct smc_dynamic_analysis *analysis,
+		struct smc_thread_handle *handle, const struct smc_event *event,
+		const struct smc_target *target,
+		struct smc_local_state *local_state,
+		struct smc_global_state *global_state);
+	struct smc_ilist *(*get_new_targets)(
+		struct smc_dynamic_analysis *analysis,
+		struct smc_thread_handle *handle, const struct smc_target *target,
+		const struct smc_event *event,
+		struct smc_local_state *local_state,
+		struct smc_global_state *global_state);
+	bool (*fast_is_related)(const struct smc_dynamic_analysis *analysis,
+				enum smc_event_type event_type);
+	void (*print_statistics)(const struct smc_dynamic_analysis *analysis,
+				 bool total);
+	void (*start_iteration)(struct smc_dynamic_analysis *analysis,
+		struct smc_global_state *global_state,
+		const struct smc_target *target);
+	void (*finish_iteration)(struct smc_dynamic_analysis *analysis,
+		struct smc_global_state *global_state, struct smc_target *target);
 };
 
 struct smc_thread_id_provider {
@@ -159,6 +228,7 @@ size_t smc_buffer_serializer_get_target_size(
 
 void smc_global_state_reset(struct smc_global_state *state);
 void smc_global_state_print(const struct smc_global_state *state);
+void smc_global_state_destroy(struct smc_global_state *state);
 
 void smc_compatible_state_print(const struct smc_compatible_state *state);
 bool smc_compatible_state_equals(const struct smc_compatible_state *state,
@@ -175,6 +245,7 @@ void smc_compatible_state_serialize(
 	struct smc_serializer *serializer);
 struct smc_compatible_state *
 smc_compatible_state_copy(const struct smc_compatible_state *state);
+void smc_compatible_state_destroy(struct smc_compatible_state *state);
 struct smc_compatible_state *
 smc_compatible_state_deserialize(struct smc_serializer *serializer);
 
@@ -183,6 +254,7 @@ struct smc_compatible_state *
 smc_local_state_get_compatible_state(const struct smc_local_state *state,
 				     struct smc_global_state *global_state);
 void smc_local_state_reset(struct smc_local_state *state);
+void smc_local_state_destroy(struct smc_local_state *state);
 
 void smc_target_init(struct smc_target *target, enum smc_target_type type,
 		     int fitness, bool request_stop);
@@ -213,54 +285,19 @@ bool smc_wait_action_post_wait(struct smc_wait_action *action, bool result);
 void smc_wait_action_cancel(struct smc_wait_action *action);
 void smc_wait_action_destroy(struct smc_wait_action *action);
 
-struct smc_target *
-smc_dynamic_analysis_get_initial_target(struct smc_dynamic_analysis *analysis);
-struct smc_local_state *
-smc_dynamic_analysis_get_initial_local_state(
-	struct smc_dynamic_analysis *analysis);
-struct smc_global_state *
-smc_dynamic_analysis_get_initial_global_state(
-	struct smc_dynamic_analysis *analysis);
-bool smc_dynamic_analysis_local_transfer(
-	const struct smc_dynamic_analysis *analysis, const struct smc_event *event,
-	struct smc_local_state *local_state);
-struct smc_wait_action *smc_dynamic_analysis_transfer(
+struct smc_wait_action *smc_dyn_an_agree_to_wait(
 	struct smc_dynamic_analysis *analysis, struct smc_thread_handle *handle,
 	const struct smc_event *event, const struct smc_target *target,
 	struct smc_local_state *local_state,
 	struct smc_global_state *global_state);
-struct smc_ilist *smc_dynamic_analysis_get_new_targets(
-	struct smc_dynamic_analysis *analysis, struct smc_thread_handle *handle,
-	const struct smc_target *target, const struct smc_event *event,
-	struct smc_local_state *local_state,
-	struct smc_global_state *global_state);
-bool smc_dynamic_analysis_fast_is_related(
-	const struct smc_dynamic_analysis *analysis,
-	enum smc_event_type event_type);
-bool smc_dynamic_analysis_fast_is_related_to_target(
-	const struct smc_dynamic_analysis *analysis,
-	enum smc_target_type target_type, enum smc_event_type event_type);
-void smc_dynamic_analysis_finish_iteration(
-	struct smc_dynamic_analysis *analysis,
-	struct smc_global_state *global_state, struct smc_target *target);
-void smc_dynamic_analysis_start_iteration(
-	struct smc_dynamic_analysis *analysis,
-	struct smc_global_state *global_state, const struct smc_target *target);
-void smc_dynamic_analysis_print_statistics(
-	const struct smc_dynamic_analysis *analysis, bool total);
-struct smc_wait_action *smc_dynamic_analysis_agree_to_wait(
-	struct smc_dynamic_analysis *analysis, struct smc_thread_handle *handle,
-	const struct smc_event *event, const struct smc_target *target,
-	struct smc_local_state *local_state,
-	struct smc_global_state *global_state);
-struct smc_target *smc_dynamic_analysis_get_current_target(
+struct smc_target *smc_dyn_an_get_current_target(
 	struct smc_dynamic_analysis *analysis, const struct smc_target *target,
 	struct smc_local_state *local_state,
 	struct smc_global_state *global_state);
-smc_uptr_t smc_dynamic_analysis_get_coverage_hash(
+smc_uptr_t smc_dyn_an_get_coverage_hash(
 	struct smc_dynamic_analysis *analysis, const struct smc_event *event);
 struct smc_dynamic_analysis *
-smc_dynamic_analysis_create_from_configuration(const char *config);
+smc_dyn_an_create_from_configuration(const char *config);
 
 smc_uptr_t smc_thread_id_provider_get_compatible_id(
 	struct smc_thread_id_provider *provider, smc_uptr_t id,
