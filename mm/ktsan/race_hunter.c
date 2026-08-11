@@ -1,9 +1,60 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "ktsan.h"
+#include <asm/processor.h>
+#include <linux/hash.h>
 
 #if KT_ENABLE_RACE_HUNTER
 #include "c_smc_algorithm.h"
 #include "c_smc_event.h"
+
+#define KT_RH_PC_CACHE_BITS 13
+#define KT_RH_PC_CACHE_SIZE (1U << KT_RH_PC_CACHE_BITS)
+
+struct kt_rh_pc_entry {
+	u64 tag;
+	uptr_t pc;
+};
+
+static struct kt_rh_pc_entry kt_rh_pc_cache[KT_RH_PC_CACHE_SIZE];
+extern bool is_ktsan_tracked(pid_t pid);
+
+static u64 kt_rh_pc_tag(u32 tid, kt_time_t clock)
+{
+	return ((u64)tid << RH_KT_CLOCK_BITS) | clock;
+}
+
+void kt_rh_record_pc(kt_thr_t *thr, kt_time_t clock, uptr_t pc)
+{
+	struct kt_rh_pc_entry *entry;
+	u64 tag;
+
+	if (!thr || !is_ktsan_tracked(thr->pid))
+		return;
+	tag = kt_rh_pc_tag(thr->id, clock);
+	entry = &kt_rh_pc_cache[hash_64(tag, KT_RH_PC_CACHE_BITS)];
+	kt_atomic64_store_no_ktsan(&entry->tag, 0);
+	kt_atomic64_store_no_ktsan(&entry->pc, pc);
+	/* x86 stores are ordered; the compiler barrier publishes pc before tag. */
+	asm volatile("" ::: "memory");
+	kt_atomic64_store_no_ktsan(&entry->tag, tag);
+}
+
+static uptr_t kt_rh_lookup_pc(u32 tid, kt_time_t clock)
+{
+	u64 tag = kt_rh_pc_tag(tid, clock);
+	struct kt_rh_pc_entry *entry =
+		&kt_rh_pc_cache[hash_64(tag, KT_RH_PC_CACHE_BITS)];
+	uptr_t pc;
+
+	if (kt_atomic64_load_no_ktsan(&entry->tag) != tag)
+		return 0;
+	asm volatile("" ::: "memory");
+	pc = kt_atomic64_load_no_ktsan(&entry->pc);
+	asm volatile("" ::: "memory");
+	if (kt_atomic64_load_no_ktsan(&entry->tag) != tag)
+		return 0;
+	return pc;
+}
 
 /* RACE HUNTER: central event dispatch guard. It keeps the adapted Race Hunter
  * callbacks from recursively entering themselves through instrumented KTSAN
@@ -14,17 +65,19 @@ static void kt_rh_on_event(kt_thr_t *thr, const struct smc_event *event)
 	if (!kt_ctx.smc_enabled || !kt_ctx.smc_algorithm || !thr ||
 	    !thr->smc_handle || thr->smc_inside)
 		return;
+	if (!on_thread_stack())
+		return;
+	if (!is_ktsan_tracked(thr->pid))
+		return;
 
 	thr->smc_inside++;
-	smc_algorithm_on_event(kt_ctx.smc_algorithm, event, thr->smc_handle);
+	smc_alg_on_event(kt_ctx.smc_algorithm, event, thr->smc_handle);
 	thr->smc_inside--;
 }
 
 void kt_rh_init(void)
 {
-	/* RACE HUNTER: the algorithm object is created by the future adapted
-	 * Race Hunter runtime. KTSAN keeps this hook as the init point.
-	 */
+	smc_minimal_init(&kt_ctx.smc_algorithm);
 }
 
 void kt_rh_thread_create(kt_thr_t *parent, kt_thr_t *child, uptr_t pc)
@@ -151,7 +204,7 @@ void kt_rh_shared_mem_access(kt_thr_t *thr, uptr_t cur_pc, uptr_t addr,
 	struct smc_event event = {
 		.type = SMC_SHARED_MEM_ACCESS_TYPE,
 		.data.shared_mem_access = {
-			.prev_pc = old.pc,
+			.prev_pc = kt_rh_lookup_pc(old.tid, old.clock),
 			.cur_pc = cur_pc,
 			.epoch_diff = epoch_diff,
 			.context = NULL,
@@ -167,6 +220,26 @@ void kt_rh_shared_mem_access(kt_thr_t *thr, uptr_t cur_pc, uptr_t addr,
 	(void)atomic;
 
 	/* RACE HUNTER: SharedMemAccess event for new target generation. */
+	kt_rh_on_event(thr, &event);
+}
+
+/* Dedicated deterministic bridge for the userspace-driven SMC self-test. */
+void kt_rh_test_shared_mem_access(kt_thr_t *thr, uptr_t prev_pc,
+				  uptr_t cur_pc)
+{
+	struct smc_event event = {
+		.type = SMC_SHARED_MEM_ACCESS_TYPE,
+		.data.shared_mem_access = {
+			.prev_pc = prev_pc,
+			.cur_pc = cur_pc,
+			.epoch_diff = 1,
+			.context = NULL,
+		},
+	};
+
+	if (!kt_ctx.smc_algorithm ||
+	    smc_alg_get_phase(kt_ctx.smc_algorithm) != SMC_PHASE_COLLECTING)
+		return;
 	kt_rh_on_event(thr, &event);
 }
 #endif /* KT_ENABLE_RACE_HUNTER */

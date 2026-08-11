@@ -69,6 +69,14 @@ kt_thr_t *kt_thr_create(kt_thr_t *thr, int pid)
 	}
 	new->seqcount_ignore = 0;
 	new->interrupt_depth = 0;
+	/* RACE HUNTER: initialize per-thread bridge state without changing the
+	 * original KTSAN thread lifecycle.
+	 */
+	smc_thread_handle_init(&new->smc_handle_storage, new->id);
+	new->smc_handle_storage.thread = new;
+	new->smc_handle = &new->smc_handle_storage;
+	new->smc_local_state = NULL;
+	new->smc_inside = 0;
 
 	kt_stat_inc(kt_stat_thread_create);
 	kt_stat_inc(kt_stat_threads);
@@ -96,6 +104,7 @@ void kt_thr_destroy(kt_thr_t *thr, kt_thr_t *old)
 		kt_seqcount_bug(old, 0, "read_disable_depth on thr end");
 	BUG_ON(old->seqcount_ignore != 0);
 	BUG_ON(old->interrupt_depth != 0);
+	smc_thread_handle_destroy(&old->smc_handle_storage);
 
 	kt_spin_lock(&pool->lock);
 	list_add_tail(&old->quarantine_list, &pool->quarantine);
@@ -124,6 +133,8 @@ void kt_thr_start(kt_thr_t *thr, uptr_t pc)
 {
 	kt_trace_add_event(thr, kt_event_thr_start,
 			   smp_processor_id() | ((u32)thr->pid << 16));
+	/* RACE HUNTER: thread-start event for target/state analyses. */
+	kt_rh_thread_start(thr, pc);
 
 	thr->cpu = this_cpu_ptr(kt_ctx.cpus);
 	BUG_ON(thr->cpu->thr != NULL);
@@ -140,6 +151,11 @@ void kt_thr_stop(kt_thr_t *thr, uptr_t pc)
 	kt_percpu_release(thr, pc);
 
 	kt_trace_add_event(thr, kt_event_thr_stop, smp_processor_id());
+	/* RACE HUNTER: finish any postponed watchpoint access and report the
+	 * thread-finish event.
+	 */
+	kt_rh_fence(thr, pc);
+	kt_rh_thread_finish(thr, pc);
 
 	BUG_ON(thr->cpu == NULL);
 	BUG_ON(thr->cpu->thr != thr);

@@ -7,6 +7,10 @@ void kt_mtx_pre_lock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr, bool try)
 {
 	/* Will be used for deadlock detection.
 	   We can also put sleeps for random time here. */
+	/* RACE HUNTER: prelock is a scheduling-relevant event for CB/DPOR-like
+	 * analyses. The bridge currently maps it in the Race Hunter runtime.
+	 */
+	kt_rh_prelock(thr, pc);
 }
 
 void kt_mtx_post_lock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr, bool try,
@@ -32,6 +36,8 @@ void kt_mtx_post_lock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr, bool try,
 	kt_mutex_lock(thr, pc, sync->uid, wr);
 
 	kt_acquire(thr, pc, sync);
+	/* RACE HUNTER: lock acquisition is a synchronization fence. */
+	kt_rh_fence(thr, pc);
 
 	BUG_ON(sync->lock_tid != -1);
 	if (wr)
@@ -55,6 +61,8 @@ void kt_mtx_pre_unlock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr)
 	kt_mutex_unlock(thr, sync->uid, wr);
 
 	kt_release(thr, pc, sync);
+	/* RACE HUNTER: unlock release is a synchronization fence. */
+	kt_rh_fence(thr, pc);
 
 	if (wr) {
 		BUG_ON(sync->lock_tid == -1);
