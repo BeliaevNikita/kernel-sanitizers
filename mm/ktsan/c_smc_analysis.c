@@ -1,7 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0
 #include "ktsan.h"
 
 #include <linux/slab.h>
+#include <linux/jiffies.h>
+#include <linux/preempt.h>
 
 #include "c_smc_analysis.h"
 #include "c_smc_watchpoint.h"
@@ -225,14 +226,42 @@ bool smc_wait_action_post_wait(struct smc_wait_action *action, bool result)
 {
 	if (!action || action->type == SMC_WAIT_ACTION_DUMMY)
 		return result;
+	if (action->type == SMC_WAIT_ACTION_WATCHPOINT)
+		return smc_watchpoint_wait_action_post_wait(container_of(action,
+			struct smc_watchpoint_wait_action, base), result);
 	return false;
 }
 
-/** Отменяет @action; текущая минимальная реализация намеренно ничего не делает. */
-void smc_wait_action_cancel(struct smc_wait_action *action) { (void)action; }
+bool smc_wait_action_wait(struct smc_wait_action *action)
+{
+	struct smc_watchpoint_wait_action *watch;
+	long timeout;
+
+	if (!action || action->type == SMC_WAIT_ACTION_DUMMY)
+		return false;
+	if (action->type != SMC_WAIT_ACTION_WATCHPOINT || in_atomic() || irqs_disabled())
+		return false;
+	watch = container_of(action, struct smc_watchpoint_wait_action, base);
+	timeout = wait_event_timeout(watch->waitq,
+		atomic_read(&watch->state) != SMC_WP_WAIT_ARMED,
+		msecs_to_jiffies(action->timeout));
+	if (!timeout)
+		atomic_cmpxchg(&watch->state, SMC_WP_WAIT_ARMED,
+			SMC_WP_WAIT_TIMEOUT);
+	return atomic_read(&watch->state) == SMC_WP_WAIT_RACE;
+}
+
+void smc_wait_action_cancel(struct smc_wait_action *action)
+{
+	if (action && action->type == SMC_WAIT_ACTION_WATCHPOINT)
+		smc_watchpoint_wait_action_cancel(container_of(action,
+			struct smc_watchpoint_wait_action, base));
+}
 /** Освобождает динамическое @action, но не NULL и не статический dummy. */
 void smc_wait_action_destroy(struct smc_wait_action *action)
 {
+	if (action && action != &dummy_action)
+		smc_wait_action_cancel(action);
 	if (action && action != &dummy_action)
 		kfree(action);
 }

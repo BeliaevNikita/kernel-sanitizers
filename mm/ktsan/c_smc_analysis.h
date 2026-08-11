@@ -151,6 +151,7 @@ struct smc_target {
 enum smc_wait_action_type {
 	SMC_WAIT_ACTION_DEFAULT,
 	SMC_WAIT_ACTION_DUMMY,
+	SMC_WAIT_ACTION_WATCHPOINT,
 };
 
 struct smc_wait_action {
@@ -284,6 +285,7 @@ struct smc_wait_action *smc_dummy_wait_action_get_instance(void);
 bool smc_wait_action_post_wait(struct smc_wait_action *action, bool result);
 void smc_wait_action_cancel(struct smc_wait_action *action);
 void smc_wait_action_destroy(struct smc_wait_action *action);
+bool smc_wait_action_wait(struct smc_wait_action *action);
 
 struct smc_wait_action *smc_dyn_an_agree_to_wait(
 	struct smc_dynamic_analysis *analysis, struct smc_thread_handle *handle,

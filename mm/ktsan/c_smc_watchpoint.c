@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include "ktsan.h"
 
 #include <linux/kernel.h>
@@ -306,6 +305,7 @@ struct smc_watchpoint *smc_watchpoint_global_state_add_if_empty(
 	bool race = false;
 	bool installed = false;
 	bool ordered;
+	struct smc_watchpoint_wait_action *wait_action = NULL;
 	int slot;
 
 	if (!state || !access || !access->addr || !access->size)
@@ -339,6 +339,7 @@ struct smc_watchpoint *smc_watchpoint_global_state_add_if_empty(
 		if (ordered)
 			goto age_watchpoint;
 		old_info = state->other_info[slot];
+		wait_action = watchpoint->action;
 		smc_watchpoint_clear(watchpoint);
 		memset(&state->other_info[slot], 0, sizeof(state->other_info[slot]));
 		race = true;
@@ -352,6 +353,12 @@ age_watchpoint:
 unlock:
 	smc_wp_unlock(&state->slot_locks[slot]);
 
+	if (installed)
+		pr_info_ratelimited("KTSAN SMC WP: installed slot=%d pc=%px addr=%px/%lu owner=%u access=%s\n",
+			slot, (void *)access->pc, (void *)access->addr,
+			access->size, handle_id,
+			access->is_read ? "read" : "write");
+
 	if (race) {
 		struct smc_other_info cur_info = {
 			.access_info = *access,
@@ -360,6 +367,9 @@ unlock:
 		};
 		smc_report_race_access(&cur_info, true, false, false);
 		smc_report_race_access(&old_info, false, true, false);
+		if (wait_action && atomic_cmpxchg(&wait_action->state,
+			SMC_WP_WAIT_ARMED, SMC_WP_WAIT_RACE) == SMC_WP_WAIT_ARMED)
+			wake_up_all(&wait_action->waitq);
 		return (struct smc_watchpoint *)SMC_WATCHPOINT_CONSUMED;
 	}
 	return installed ? watchpoint : NULL;
@@ -439,6 +449,7 @@ int smc_watchpoint_an_init(struct smc_watchpoint_analysis *analysis)
 		smc_watchpoint_an_get_initial_local_state;
 	analysis->base.get_initial_global_state =
 		smc_watchpoint_an_get_initial_global_state;
+	analysis->base.local_transfer = smc_watchpoint_an_local_transfer;
 	analysis->base.transfer = smc_watchpoint_an_transfer;
 	analysis->base.get_new_targets =
 		smc_watchpoint_an_get_new_targets;
@@ -460,6 +471,25 @@ int smc_watchpoint_an_init(struct smc_watchpoint_analysis *analysis)
 		kt_spin_init((kt_spinlock_t *)&analysis->global_state.slot_locks[i]);
 	kt_spin_init((kt_spinlock_t *)&analysis->global_state.report_lock);
 	return 0;
+}
+
+bool smc_watchpoint_an_local_transfer(
+	const struct smc_dynamic_analysis *base, const struct smc_event *event,
+	struct smc_local_state *local_state)
+{
+	const struct smc_watchpoint_analysis *analysis;
+	struct smc_watchpoint_local_state *state;
+	bool related = false;
+
+	if (!base || !event || !local_state)
+		return false;
+	analysis = container_of(base, struct smc_watchpoint_analysis, base);
+	state = container_of(local_state, struct smc_watchpoint_local_state, base);
+	state->nth_event_count++;
+	if (analysis->inner && analysis->inner->local_transfer && state->inner)
+		related = analysis->inner->local_transfer(analysis->inner, event,
+			state->inner);
+	return related;
 }
 
 /** Атомарно обнуляет все счётчики и статус цели @analysis, не затрагивая
@@ -495,6 +525,24 @@ void smc_watchpoint_an_destroy(struct smc_dynamic_analysis *base)
 		return;
 	analysis = smc_to_watchpoint(base);
 	smc_watchpoint_global_state_destroy(&analysis->global_state);
+}
+
+void smc_watchpoint_an_cancel_waits(struct smc_watchpoint_analysis *analysis)
+{
+	int i;
+
+	if (!analysis)
+		return;
+	for (i = 0; i < SMC_CONFIG_NUM_WATCHPOINTS; i++) {
+		struct smc_watchpoint_wait_action *action;
+
+		smc_wp_lock(&analysis->global_state.slot_locks[i]);
+		action = analysis->global_state.watchpoints[i].action;
+		if (action && atomic_cmpxchg(&action->state, SMC_WP_WAIT_ARMED,
+			SMC_WP_WAIT_CANCELLED) == SMC_WP_WAIT_ARMED)
+			wake_up_all(&action->waitq);
+		smc_wp_unlock(&analysis->global_state.slot_locks[i]);
+	}
 }
 
 /** Создаёт для анализа @base стартовую collection-цель с GFP_ATOMIC.
@@ -547,6 +595,34 @@ struct smc_global_state *smc_watchpoint_an_get_initial_global_state(
 	return &analysis->global_state.base;
 }
 
+static struct smc_wait_action *smc_watchpoint_create_wait_action(
+	struct smc_watchpoint_analysis *analysis,
+	struct smc_thread_handle *handle, struct smc_watchpoint *watchpoint,
+	struct smc_target *target, const struct smc_mem_access *access)
+{
+	struct smc_watchpoint_wait_action *action;
+
+	if (!analysis || !handle || !watchpoint || !access)
+		return NULL;
+	action = kzalloc(sizeof(*action), GFP_ATOMIC);
+	if (!action)
+		return NULL;
+	action->base.type = SMC_WAIT_ACTION_WATCHPOINT;
+	action->base.timeout = analysis->timeout;
+	init_waitqueue_head(&action->waitq);
+	atomic_set(&action->state, SMC_WP_WAIT_ARMED);
+	action->handle = handle;
+	action->target = target;
+	action->global_state = &analysis->global_state;
+	action->stats = &analysis->stats;
+	action->watchpoint = watchpoint;
+	action->mem_access = *access;
+	action->generation = handle->local_state_generation;
+	watchpoint->generation = handle->local_state_generation;
+	watchpoint->action = action;
+	return &action->base;
+}
+
 /** Выполняет переход анализа @base для @event/@handle и текущей @target.
  * Shared-access учитывается статистикой; обычный доступ по целевому PC ставит
  * watchpoint либо обнаруживает гонку. @local_state/@global_state сейчас не
@@ -560,9 +636,11 @@ struct smc_wait_action *smc_watchpoint_an_transfer(
 	struct smc_watchpoint_analysis *analysis;
 	struct smc_watchpoint *result;
 	struct smc_target *mutable_target = (struct smc_target *)target;
+	struct smc_watchpoint_local_state *wp_local = local_state ?
+		container_of(local_state, struct smc_watchpoint_local_state, base) : NULL;
+	const struct smc_compatible_state *target_state = NULL;
 	bool should_set;
 
-	(void)local_state;
 	(void)global_state;
 	if (!base || !handle || !event)
 		return NULL;
@@ -573,10 +651,41 @@ struct smc_wait_action *smc_watchpoint_an_transfer(
 			&analysis->stats.shared_accesses_iteration, 1);
 		return NULL;
 	}
+	if (event->type == SMC_FENCE_TYPE && wp_local && wp_local->postponed) {
+		struct smc_mem_access postponed = *wp_local->postponed;
+
+		kfree(wp_local->postponed);
+		wp_local->postponed = NULL;
+		result = smc_watchpoint_global_state_add_if_empty(
+			&analysis->global_state, &postponed, true, handle->id);
+		if (result && result != (void *)SMC_WATCHPOINT_CONSUMED)
+			return smc_watchpoint_create_wait_action(analysis, handle,
+				result, mutable_target, &postponed);
+		return NULL;
+	}
 	if (event->type != SMC_MEM_ACCESS_TYPE)
 		return NULL;
 	should_set = smc_watchpoint_target_has_pc(target,
 		event->data.mem_access.pc);
+	if (target && target->type == SMC_RANDOM_SHARED_TARGET_TYPE && wp_local)
+		should_set = wp_local->skip_count-- <= 0;
+	if (target && target->type == SMC_SHARED_TARGET_INTRUSION_TYPE)
+		target_state = smc_shared_intrusion_target_get_state(container_of(target,
+			struct smc_shared_intrusion_target, base),
+			event->data.mem_access.pc);
+	if (should_set && analysis->enable_interesting_check &&
+	    !smc_compatible_state_is_interesting(target_state))
+		should_set = false;
+	if (should_set && wp_local &&
+	    smc_watchpoint_local_state_is_access_covered(wp_local,
+		event->data.mem_access.pc, target_state))
+		should_set = false;
+	if (should_set && wp_local &&
+	    (event->data.mem_access.typ == SMC_ACCESS_IMITATE || analysis->weak_mem)) {
+		if (!wp_local->postponed)
+			wp_local->postponed = smc_mem_access_copy(&event->data.mem_access);
+		return NULL;
+	}
 	result = smc_watchpoint_global_state_add_if_empty(
 		&analysis->global_state, &event->data.mem_access,
 		should_set && !event->data.mem_access.is_atomic, handle->id);
@@ -593,6 +702,12 @@ struct smc_wait_action *smc_watchpoint_an_transfer(
 		kt_atomic32_compare_exchange_no_ktsan(
 			&analysis->stats.target_status, SMC_TARGET_STATUS_NONE,
 			SMC_TARGET_STATUS_ACCESS);
+		if (wp_local)
+			smc_watchpoint_local_state_add_covered_access(wp_local,
+				event->data.mem_access.pc,
+				(struct smc_compatible_state *)target_state);
+		return smc_watchpoint_create_wait_action(analysis, handle, result,
+			mutable_target, &event->data.mem_access);
 	}
 	if (mutable_target &&
 	    ++mutable_target->events >= SMC_WP_TARGET_EVENT_LIMIT)
@@ -763,8 +878,13 @@ void smc_init_watchpoint_thread_locals(void) {}
 bool smc_watchpoint_wait_action_post_wait(
 	struct smc_watchpoint_wait_action *action, bool result)
 {
-	(void)action;
-	return result;
+	if (!action)
+		return false;
+	if (atomic_read(&action->state) == SMC_WP_WAIT_TIMEOUT && action->target) {
+		action->target->explored = true;
+		action->target->request_stop = true;
+	}
+	return false;
 }
 
 /** Отменяет @action; минимальная реализация не содержит ресурсов и является
@@ -772,5 +892,25 @@ bool smc_watchpoint_wait_action_post_wait(
 void smc_watchpoint_wait_action_cancel(
 	struct smc_watchpoint_wait_action *action)
 {
-	(void)action;
+	struct smc_watchpoint *watchpoint;
+	int slot;
+
+	if (!action)
+		return;
+	atomic_cmpxchg(&action->state, SMC_WP_WAIT_ARMED,
+		SMC_WP_WAIT_CANCELLED);
+	wake_up_all(&action->waitq);
+	watchpoint = action->watchpoint;
+	if (!watchpoint || !action->global_state)
+		return;
+	slot = watchpoint - action->global_state->watchpoints;
+	if (slot < 0 || slot >= SMC_CONFIG_NUM_WATCHPOINTS)
+		return;
+	smc_wp_lock(&action->global_state->slot_locks[slot]);
+	if (watchpoint->action == action) {
+		smc_watchpoint_clear(watchpoint);
+		memset(&action->global_state->other_info[slot], 0,
+			sizeof(action->global_state->other_info[slot]));
+	}
+	smc_wp_unlock(&action->global_state->slot_locks[slot]);
 }

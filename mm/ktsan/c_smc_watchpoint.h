@@ -1,16 +1,9 @@
-/*===-- c_smc_watchpoint.h ------------------------------------------------===*
- *
- * This file is a part of SMC RaceHunter, a race detector.
- *
- * C/kernel declarations for smc_watchpoint.h.
- *
- *===----------------------------------------------------------------------===*/
-
 #ifndef C_SMC_WATCHPOINT_H
 #define C_SMC_WATCHPOINT_H
 
 #include <linux/atomic.h>
 #include <linux/types.h>
+#include <linux/wait.h>
 
 #include "c_smc_analysis.h"
 #include "c_smc_data.h"
@@ -25,6 +18,7 @@ struct smc_mutex;
 struct smc_report_stack;
 struct smc_thread_handle;
 struct smc_thread_safe_timer;
+struct smc_watchpoint_wait_action;
 
 enum smc_target_status {
 	SMC_TARGET_STATUS_NONE,
@@ -59,6 +53,8 @@ struct smc_watchpoint {
 	u32 life;
 	bool is_read;
 	bool is_atomic;
+	u32 generation;
+	struct smc_watchpoint_wait_action *action;
 };
 
 struct smc_watchpoint_local_state {
@@ -88,13 +84,24 @@ struct smc_watchpoint_global_state {
 };
 
 struct smc_watchpoint_wait_action {
+	struct smc_wait_action base;
+	wait_queue_head_t waitq;
+	atomic_t state;
 	struct smc_thread_handle *handle;
+	struct smc_target *target;
 	struct smc_watchpoint_global_state *global_state;
 	struct smc_wp_statistics *stats;
 	struct smc_watchpoint *watchpoint;
-	const struct smc_mem_access *mem_access;
+	struct smc_mem_access mem_access;
 	smc_uptr_t cur_pc;
-	unsigned int timeout;
+	u32 generation;
+};
+
+enum smc_watchpoint_wait_state {
+	SMC_WP_WAIT_ARMED,
+	SMC_WP_WAIT_RACE,
+	SMC_WP_WAIT_TIMEOUT,
+	SMC_WP_WAIT_CANCELLED,
 };
 
 struct smc_watchpoint_analysis {
@@ -115,8 +122,12 @@ struct smc_watchpoint_analysis {
 
 int smc_watchpoint_an_init(struct smc_watchpoint_analysis *analysis);
 void smc_watchpoint_an_destroy(struct smc_dynamic_analysis *analysis);
+void smc_watchpoint_an_cancel_waits(struct smc_watchpoint_analysis *analysis);
 
 void smc_init_watchpoint_thread_locals(void);
+bool smc_watchpoint_an_local_transfer(
+	const struct smc_dynamic_analysis *analysis,
+	const struct smc_event *event, struct smc_local_state *local_state);
 
 void smc_add_race_info(struct smc_other_info *info, u32 handle_tid,
 		       smc_uptr_t pc);

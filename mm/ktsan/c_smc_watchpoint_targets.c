@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/slab.h>
 
 #include "c_smc_watchpoint_targets.h"
@@ -151,7 +150,7 @@ static bool target_equals(const struct smc_target *target,
 }
 
 /** Пытается добавить все элементы @other_base в intrusion-цель @base.
- * Проверяет тип, limit и дубликаты, глубоко копирует states; при любой ошибке
+ * Проверяет тип, limit и дубликаты, копирует states; при любой ошибке
  * откатывает уже добавленные элементы и fitness. Return: успех транзакции. */
 static bool intrusion_merge(struct smc_target *base,
 			    const struct smc_target *other_base)
@@ -387,7 +386,7 @@ struct smc_target *smc_shared_intrusion_target_create(smc_uptr_t pc,
 		SMC_INTRUSION_LIST_LIMIT_DEFAULT, false, gfp);
 }
 
-/** Добавляет @pc и глубокую копию @info в @target. Проверяет NULL, нулевой PC
+/** Добавляет @pc и копию @info в @target. Проверяет NULL, нулевой PC
  * и limit; при ошибке вставки освобождает копию. Неинтересный state увеличивает
  * raw fitness при включённом фильтре. Return: был ли элемент добавлен. */
 bool smc_shared_intrusion_target_add(struct smc_shared_intrusion_target *target,
