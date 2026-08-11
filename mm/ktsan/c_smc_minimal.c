@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include "ktsan.h"
 
 #include <linux/kernel.h>
@@ -11,6 +10,29 @@
 static struct smc_algorithm smc_runtime;
 static struct smc_watchpoint_analysis watchpoint_analysis;
 static struct smc_waitlist target_waitlist;
+
+static void smc_destroy_target(struct smc_target *target)
+{
+	if (target && target->ops && target->ops->destroy)
+		target->ops->destroy(target);
+}
+
+static bool smc_target_list_contains(const struct smc_ilist *list,
+				     const struct smc_target *target)
+{
+	struct smc_ilist_const_iter iter, end;
+
+	end = smc_ilist_cend(list);
+	for (iter = smc_ilist_cbegin(list);
+	     !smc_ilist_const_iter_equal(&iter, &end);
+	     smc_ilist_const_iter_next(&iter)) {
+		struct smc_target *const *queued = smc_ilist_const_iter_get(&iter);
+
+		if (smc_target_equals(*queued, target))
+			return true;
+	}
+	return false;
+}
 
 /** Печатает добавленную @target и состояние @algorithm; для intrusion выводит
  * первый PC/размер списка, для monitoring — оба PC. Только отладочный вывод. */
@@ -108,11 +130,19 @@ void smc_dyn_alg_init(struct smc_dynamic_algorithm *algorithm,
 	algorithm->waitlist = &target_waitlist;
 	kt_spin_init((kt_spinlock_t *)&algorithm->event_lock);
 	smc_waitlist_init(algorithm->waitlist, SMC_WAITLIST_DFS);
+	smc_ilist_init(&algorithm->iteration_targets,
+		sizeof(struct smc_target *), GFP_ATOMIC, NULL);
+	smc_ilist_init(&algorithm->explored_targets,
+		sizeof(struct smc_target *), GFP_ATOMIC, NULL);
 	smc_coverage_init(&algorithm->coverage);
+	atomic_set(&algorithm->active_events, 0);
+	init_waitqueue_head(&algorithm->quiescent_waitq);
 	smc_dyn_alg_set_next_target(algorithm,
 		analysis->get_initial_target ?
 		analysis->get_initial_target(analysis) : NULL);
 	algorithm->iteration_going = true;
+	algorithm->phase = SMC_PHASE_COLLECTING;
+	algorithm->iteration_id = 1;
 }
 
 /** Создаёт глобальный минимальный runtime и возвращает его через @algorithm.
@@ -132,9 +162,7 @@ void smc_minimal_init(struct smc_algorithm **algorithm)
 	pr_info("KTSAN: target-driven SMC watchpoint analysis initialized\n");
 }
 
-/** Переносит все цели из списка @targets в waitlist @algorithm. Дубликаты
- * уничтожаются, успешные цели учитываются и печатаются; контейнер списка
- * освобождается в конце. NULL означает отсутствие новых целей. */
+/** Сохраняет цели текущего запуска отдельно от основной очереди. */
 static void smc_add_new_targets(struct smc_dynamic_algorithm *algorithm,
 				struct smc_ilist *targets)
 {
@@ -145,7 +173,9 @@ static void smc_add_new_targets(struct smc_dynamic_algorithm *algorithm,
 	while (smc_ilist_pop_front(targets, &target)) {
 		if (!target)
 			continue;
-		if (!smc_waitlist_add(algorithm->waitlist, target)) {
+		if (smc_target_list_contains(&algorithm->iteration_targets, target) ||
+		    smc_target_list_contains(&algorithm->explored_targets, target) ||
+		    smc_ilist_push_back(&algorithm->iteration_targets, &target)) {
 			pr_info("KTSAN SMC: target duplicate type=%d fitness=%d (not queued)\n",
 				target->type, target->raw_fitness);
 			if (target->ops && target->ops->destroy)
@@ -158,46 +188,77 @@ static void smc_add_new_targets(struct smc_dynamic_algorithm *algorithm,
 	kfree(targets);
 }
 
-/** Переключает @algorithm на следующую цель waitlist. Перед заменой завершает
- * итерацию и уничтожает старую цель, сбрасывает global watchpoint state и
- * увеличивает restart_count. При пустой очереди ничего не меняет. */
-static void smc_advance_target(struct smc_dynamic_algorithm *algorithm)
+static void smc_discard_iteration_targets(struct smc_dynamic_algorithm *algorithm)
+{
+	struct smc_target *target;
+
+	while (smc_ilist_pop_front(&algorithm->iteration_targets, &target))
+		smc_destroy_target(target);
+}
+
+static void smc_commit_iteration_targets(struct smc_dynamic_algorithm *algorithm)
+{
+	struct smc_target *target;
+
+	while (smc_ilist_pop_front(&algorithm->iteration_targets, &target)) {
+		if (!smc_waitlist_add(algorithm->waitlist, target))
+			smc_destroy_target(target);
+	}
+}
+
+/** Завершает текущую цель и фиксирует цели, найденные в этой итерации. */
+static void smc_finish_target(struct smc_dynamic_algorithm *algorithm)
 {
 	struct smc_target *old = algorithm->target;
-	struct smc_target *next = smc_waitlist_get_next(algorithm->waitlist);
+	bool new_coverage;
 
-	if (!next)
-		return;
 	if (old) {
 		if (algorithm->analysis->finish_iteration)
 			algorithm->analysis->finish_iteration(algorithm->analysis,
 				algorithm->global_state, old);
-		if (old->ops && old->ops->destroy)
-			old->ops->destroy(old);
+		if (smc_ilist_push_back(&algorithm->explored_targets, &old))
+			smc_destroy_target(old);
 	}
+	algorithm->target = NULL;
+	new_coverage = smc_coverage_save_current(&algorithm->coverage);
+	if (!algorithm->smc_target_coverage || new_coverage)
+		smc_commit_iteration_targets(algorithm);
+	else
+		smc_discard_iteration_targets(algorithm);
+	smc_coverage_reset_current(&algorithm->coverage);
 	smc_global_state_reset(algorithm->global_state);
-	algorithm->iteration_generation++;
-	if (!algorithm->iteration_generation)
-		algorithm->iteration_generation = 1;
-	smc_dyn_alg_set_next_target(algorithm, next);
-	algorithm->restart_count++;
+	algorithm->iteration_going = false;
+	algorithm->stop_requested = false;
+	algorithm->restart_required = smc_waitlist_size(algorithm->waitlist) != 0;
+	algorithm->phase = algorithm->restart_required ? SMC_PHASE_IDLE :
+		SMC_PHASE_COMPLETE;
 }
 
 /** Обрабатывает @event потока @handle в @algorithm. Под event_lock фильтрует
- * событие/цель, лениво создаёт local state, выполняет local_transfer,
+ * событие/цель, создаёт local state, выполняет local_transfer,
  * transfer и get_new_targets, затем освобождает цель и при необходимости
- * переключает итерацию. Важное ограничение: callbacks исполняются под lock. */
+ * переключает итерацию. Сallbacks исполняются под lock. */
 void smc_dyn_alg_on_event(struct smc_dynamic_algorithm *algorithm,
 				    const struct smc_event *event,
 				    struct smc_thread_handle *handle)
 {
-	struct smc_wait_action *action;
+	struct smc_wait_action *action = NULL;
 	struct smc_ilist *new_targets;
 
 	if (!algorithm || !algorithm->analysis || !event || !handle)
 		return;
+	if (algorithm->phase != SMC_PHASE_COLLECTING &&
+	    algorithm->phase != SMC_PHASE_TARGET)
+		return;
+	atomic_inc(&algorithm->active_events);
 
 	smc_runtime_lock(&algorithm->event_lock);
+	if (!algorithm->iteration_going || algorithm->phase == SMC_PHASE_FINISHING)
+		goto unlock;
+	if (event->type == SMC_SHARED_MEM_ACCESS_TYPE)
+		smc_coverage_add_shared_access(&algorithm->coverage,
+			event->data.shared_mem_access.prev_pc,
+			event->data.shared_mem_access.cur_pc, 0);
 	if (!algorithm->target ||
 	    !algorithm->analysis->fast_is_related ||
 	    !algorithm->analysis->fast_is_related(algorithm->analysis,
@@ -226,10 +287,6 @@ void smc_dyn_alg_on_event(struct smc_dynamic_algorithm *algorithm,
 		algorithm->analysis->transfer(algorithm->analysis, handle, event,
 			algorithm->target, handle->local_state,
 			algorithm->global_state) : NULL;
-	if (action) {
-		smc_wait_action_post_wait(action, false);
-		smc_wait_action_destroy(action);
-	}
 	new_targets = algorithm->analysis->get_new_targets ?
 		algorithm->analysis->get_new_targets(algorithm->analysis, handle,
 			algorithm->target, event, handle->local_state,
@@ -237,12 +294,23 @@ void smc_dyn_alg_on_event(struct smc_dynamic_algorithm *algorithm,
 	smc_add_new_targets(algorithm, new_targets);
 	smc_target_release(algorithm->target);
 
-	if ((algorithm->target->type == SMC_SHARED_TARGET_COLLECTION_TYPE &&
-	     smc_waitlist_size(algorithm->waitlist)) ||
-	    algorithm->target->explored)
-		smc_advance_target(algorithm);
+	if (algorithm->target->explored || algorithm->target->request_stop)
+		algorithm->stop_requested = true;
 unlock:
 	smc_runtime_unlock(&algorithm->event_lock);
+	if (action) {
+		bool waited = smc_wait_action_wait(action);
+
+		smc_wait_action_post_wait(action, waited);
+		smc_wait_action_destroy(action);
+		smc_runtime_lock(&algorithm->event_lock);
+		if (algorithm->target && (algorithm->target->explored ||
+		    algorithm->target->request_stop))
+			algorithm->stop_requested = true;
+		smc_runtime_unlock(&algorithm->event_lock);
+	}
+	if (atomic_dec_and_test(&algorithm->active_events))
+		wake_up_all(&algorithm->quiescent_waitq);
 }
 
 /** Общая точка входа события @event для @algorithm и потока @handle.
@@ -264,8 +332,96 @@ bool smc_alg_on_finalize(struct smc_algorithm *algorithm)
 {
 	if (!algorithm)
 		return false;
-	smc_advance_target(&algorithm->data.dynamic);
-	return algorithm->data.dynamic.target != NULL;
+	smc_alg_finish_iteration(algorithm);
+	return smc_alg_restart_required(algorithm);
+}
+
+int smc_alg_start_iteration(struct smc_algorithm *algorithm)
+{
+	struct smc_dynamic_algorithm *dynamic;
+	struct smc_target *next;
+
+	if (!algorithm || algorithm->type != SMC_ALGORITHM_DYNAMIC)
+		return -EINVAL;
+	dynamic = &algorithm->data.dynamic;
+	smc_runtime_lock(&dynamic->event_lock);
+	if (dynamic->phase != SMC_PHASE_IDLE) {
+		smc_runtime_unlock(&dynamic->event_lock);
+		return -EBUSY;
+	}
+	next = smc_waitlist_get_next(dynamic->waitlist);
+	if (!next) {
+		dynamic->phase = SMC_PHASE_COMPLETE;
+		dynamic->restart_required = false;
+		smc_runtime_unlock(&dynamic->event_lock);
+		return -ENOENT;
+	}
+	dynamic->iteration_generation++;
+	if (!dynamic->iteration_generation)
+		dynamic->iteration_generation = 1;
+	dynamic->iteration_id++;
+	dynamic->iteration_result = SMC_ITERATION_NONE;
+	dynamic->stop_requested = false;
+	dynamic->restart_required = false;
+	dynamic->iteration_going = true;
+	dynamic->phase = SMC_PHASE_TARGET;
+	smc_dyn_alg_set_next_target(dynamic, next);
+	dynamic->restart_count++;
+	smc_runtime_unlock(&dynamic->event_lock);
+	return 0;
+}
+
+enum smc_iteration_result smc_alg_finish_iteration(
+	struct smc_algorithm *algorithm)
+{
+	struct smc_dynamic_algorithm *dynamic;
+
+	if (!algorithm || algorithm->type != SMC_ALGORITHM_DYNAMIC)
+		return SMC_ITERATION_ABORTED;
+	dynamic = &algorithm->data.dynamic;
+	smc_runtime_lock(&dynamic->event_lock);
+	if (dynamic->phase != SMC_PHASE_COLLECTING &&
+	    dynamic->phase != SMC_PHASE_TARGET) {
+		smc_runtime_unlock(&dynamic->event_lock);
+		return dynamic->iteration_result;
+	}
+	dynamic->phase = SMC_PHASE_FINISHING;
+	dynamic->iteration_going = false;
+	smc_runtime_unlock(&dynamic->event_lock);
+	if (dynamic->analysis->type == SMC_DYNAMIC_ANALYSIS_WATCHPOINT)
+		smc_watchpoint_an_cancel_waits(container_of(dynamic->analysis,
+			struct smc_watchpoint_analysis, base));
+	wait_event(dynamic->quiescent_waitq,
+		atomic_read(&dynamic->active_events) == 0);
+	smc_runtime_lock(&dynamic->event_lock);
+	if (dynamic->iteration_result == SMC_ITERATION_NONE) {
+		if (dynamic->analysis->type == SMC_DYNAMIC_ANALYSIS_WATCHPOINT &&
+		    kt_atomic32_load_no_ktsan(&container_of(dynamic->analysis,
+			struct smc_watchpoint_analysis, base)->stats.target_status) ==
+			SMC_TARGET_STATUS_RACE)
+			dynamic->iteration_result = SMC_ITERATION_RACE;
+		else if (dynamic->target && dynamic->target->events >= 4096)
+			dynamic->iteration_result = SMC_ITERATION_EVENT_LIMIT;
+		else if (dynamic->target && dynamic->target->reached)
+			dynamic->iteration_result = SMC_ITERATION_ACCESS_REACHED;
+		else
+			dynamic->iteration_result = SMC_ITERATION_TARGET_NOT_REACHED;
+	}
+	smc_finish_target(dynamic);
+	smc_runtime_unlock(&dynamic->event_lock);
+	return dynamic->iteration_result;
+}
+
+enum smc_iteration_phase smc_alg_get_phase(struct smc_algorithm *algorithm)
+{
+	return algorithm && algorithm->type == SMC_ALGORITHM_DYNAMIC ?
+		algorithm->data.dynamic.phase : SMC_PHASE_COMPLETE;
+}
+
+bool smc_alg_restart_required(struct smc_algorithm *algorithm)
+{
+	return algorithm && algorithm->type == SMC_ALGORITHM_DYNAMIC &&
+		algorithm->data.dynamic.restart_required;
 }
 
 /** Печатает общую и watchpoint-статистику глобального runtime, после чего

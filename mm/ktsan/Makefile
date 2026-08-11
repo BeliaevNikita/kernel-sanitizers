@@ -33,6 +33,13 @@ obj-y := access.o 		\
 	 tests.o 		\
 	 thr.o 			\
 	 trace.o 		\
+	 ktsan_sysfs.o # MY FILE
+	 
+# Добавить правила удаления флагов для sysfs файла
+CFLAGS_REMOVE_ktsan_sysfs.o		= -pg -O0 -O1 -O2
+
+# Добавить флаги оптимизации для sysfs файла
+CFLAGS_ktsan_sysfs.o			= -O3 -fomit-frame-pointer
 
 CFLAGS_REMOVE_access.o			= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_cache.o			= -pg -O0 -O1 -O2

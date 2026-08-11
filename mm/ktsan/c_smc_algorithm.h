@@ -3,6 +3,7 @@
 
 #include <linux/types.h>
 #include <linux/atomic.h>
+#include <linux/wait.h>
 
 #include "c_smc_analysis.h"
 #include "c_smc_waitlist.h"
@@ -16,6 +17,24 @@ typedef void *smc_mutation_state_t;
 
 enum smc_algorithm_type {
 	SMC_ALGORITHM_DYNAMIC,
+};
+
+enum smc_iteration_phase {
+	SMC_PHASE_IDLE,
+	SMC_PHASE_COLLECTING,
+	SMC_PHASE_TARGET,
+	SMC_PHASE_FINISHING,
+	SMC_PHASE_COMPLETE,
+};
+
+enum smc_iteration_result {
+	SMC_ITERATION_NONE,
+	SMC_ITERATION_RACE,
+	SMC_ITERATION_ACCESS_REACHED,
+	SMC_ITERATION_TARGET_NOT_REACHED,
+	SMC_ITERATION_TIMEOUT,
+	SMC_ITERATION_EVENT_LIMIT,
+	SMC_ITERATION_ABORTED,
 };
 
 struct smc_bitmap_pair {
@@ -38,8 +57,17 @@ struct smc_dynamic_algorithm {
 	enum smc_target_type target_type;
 	struct smc_reached_set *reached;
 	struct smc_waitlist *waitlist;
+	struct smc_ilist iteration_targets;
+	struct smc_ilist explored_targets;
 	u8 event_lock;
 	struct smc_coverage coverage;
+	enum smc_iteration_phase phase;
+	enum smc_iteration_result iteration_result;
+	u64 iteration_id;
+	bool restart_required;
+	bool stop_requested;
+	atomic_t active_events;
+	wait_queue_head_t quiescent_waitq;
 	int reached_targets;
 	int feasible_targets;
 	int infeasible_targets;
@@ -80,6 +108,11 @@ void smc_alg_on_event(struct smc_algorithm *algorithm,
 			    const struct smc_event *event,
 			    struct smc_thread_handle *handle);
 bool smc_alg_on_finalize(struct smc_algorithm *algorithm);
+int smc_alg_start_iteration(struct smc_algorithm *algorithm);
+enum smc_iteration_result smc_alg_finish_iteration(
+	struct smc_algorithm *algorithm);
+enum smc_iteration_phase smc_alg_get_phase(struct smc_algorithm *algorithm);
+bool smc_alg_restart_required(struct smc_algorithm *algorithm);
 
 void smc_dyn_alg_init(struct smc_dynamic_algorithm *algorithm,
 				struct smc_dynamic_analysis *analysis);
