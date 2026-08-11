@@ -93,6 +93,10 @@ static inline kt_task_t *kt_current_task(void)
 	exit:                                                                  \
 	KT_BUG_ON(thr &&event_handled && thr->inside);                         \
 	ENABLE_INTERRUPTS(kt_flags);                                           \
+	/* Do not enter the deferred-wait runtime on every KTSAN hook. */      \
+	if (event_handled && thr && thr->smc_handle &&                         \
+	    thr->smc_handle->pending_wait_action)                              \
+		smc_thread_handle_process_wait(thr->smc_handle);                 \
 	/**/
 
 void __init ktsan_init_early(void)

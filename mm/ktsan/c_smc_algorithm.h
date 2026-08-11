@@ -7,7 +7,7 @@
 
 #include "c_smc_analysis.h"
 #include "c_smc_waitlist.h"
-#include "smc_hash_c.h"
+#include "c_smc_hash.h"
 
 struct smc_mutex;
 struct smc_timer;

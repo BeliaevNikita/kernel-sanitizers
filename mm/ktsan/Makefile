@@ -29,6 +29,7 @@ obj-y := access.o 		\
 	 sync.o 		\
 	 tab.o 			\
 	 tests_inst.o 		\
+	 tests_inst_full.o 	\
 	 tests_noinst.o 	\
 	 tests.o 		\
 	 thr.o 			\
@@ -71,6 +72,7 @@ CFLAGS_REMOVE_sync_seqlock.o		= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_sync.o			= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_tab.o			= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_tests_inst.o		= -pg -O0 -O1 -O2
+CFLAGS_REMOVE_tests_inst_full.o	= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_tests_noinst.o		= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_tests.o			= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_thr.o			= -pg -O0 -O1 -O2
@@ -106,6 +108,7 @@ CFLAGS_sync_seqlock.o		= -O3 -fomit-frame-pointer
 CFLAGS_sync.o			= -O3 -fomit-frame-pointer
 CFLAGS_tab.o			= -O3 -fomit-frame-pointer
 CFLAGS_tests_inst.o		= -O3 -fomit-frame-pointer
+CFLAGS_tests_inst_full.o	= -O3 -fomit-frame-pointer
 CFLAGS_tests_noinst.o		= -O3 -fomit-frame-pointer
 CFLAGS_tests.o			= -O3 -fomit-frame-pointer
 CFLAGS_thr.o			= -O3 -fomit-frame-pointer
@@ -121,4 +124,5 @@ KTSAN_SANITIZE_c_smc_waitlist.o := n
 KTSAN_SANITIZE_c_smc_watchpoint.o := n
 KTSAN_SANITIZE_c_smc_watchpoint_targets.o := n
 KTSAN_SANITIZE_tests_inst.o = y
+KTSAN_SANITIZE_tests_inst_full.o = y
 KCOV_INSTRUMENT := n

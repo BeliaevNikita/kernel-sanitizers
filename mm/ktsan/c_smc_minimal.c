@@ -91,17 +91,76 @@ void smc_thread_handle_init(struct smc_thread_handle *handle, u32 id)
 	handle->thread = NULL;
 	handle->local_state = NULL;
 	handle->local_state_generation = 0;
+	handle->pending_wait_action = NULL;
+	handle->pending_wait_algorithm = NULL;
 }
 
 /** Освобождает принадлежащее @handle локальное состояние с учётом его типа.
  * NULL и уже очищенный handle безопасны; сам handle не освобождается. */
 void smc_thread_handle_destroy(struct smc_thread_handle *handle)
 {
-	if (!handle || !handle->local_state)
+	if (!handle)
+		return;
+	smc_thread_handle_process_wait(handle);
+	if (!handle->local_state)
 		return;
 	smc_local_state_destroy(handle->local_state);
 	handle->local_state = NULL;
 	handle->local_state_generation = 0;
+}
+
+static void smc_complete_wait_action(struct smc_dynamic_algorithm *algorithm,
+	struct smc_wait_action *action)
+{
+	bool waited;
+
+	if (!algorithm || !action)
+		return;
+	waited = smc_wait_action_wait(action);
+	smc_wait_action_post_wait(action, waited);
+	smc_wait_action_destroy(action);
+	smc_runtime_lock(&algorithm->event_lock);
+	if (algorithm->target && (algorithm->target->explored ||
+	    algorithm->target->request_stop))
+		algorithm->stop_requested = true;
+	smc_runtime_unlock(&algorithm->event_lock);
+	if (kt_atomic32_fetch_add_no_ktsan(&algorithm->active_events,
+		(u32)-1) == 1)
+		wake_up_all(&algorithm->quiescent_waitq);
+}
+
+/** Выполняет отложенное ожидание после выхода из KTSAN ENTER/LEAVE. */
+void smc_thread_handle_process_wait(struct smc_thread_handle *handle)
+{
+	struct smc_wait_action *action;
+	struct smc_dynamic_algorithm *algorithm;
+	kt_thr_t *thr;
+
+	if (!handle)
+		return;
+	action = handle->pending_wait_action;
+	if (!action)
+		return;
+	thr = handle->thread;
+	/*
+	 * LEAVE has already cleared thr->inside before calling us.  Keep Race
+	 * Hunter disabled while waitqueue, printk, allocator and scheduler code
+	 * execute, otherwise those internals recursively enter the same analysis.
+	 */
+	if (thr)
+		thr->smc_inside++;
+	algorithm = handle->pending_wait_algorithm;
+	handle->pending_wait_action = NULL;
+	handle->pending_wait_algorithm = NULL;
+	if (WARN_ON_ONCE(!algorithm)) {
+		smc_wait_action_destroy(action);
+		if (thr)
+			thr->smc_inside--;
+		return;
+	}
+	smc_complete_wait_action(algorithm, action);
+	if (thr)
+		thr->smc_inside--;
 }
 
 /** Делает @target текущей целью @algorithm, синхронизирует target_type и
@@ -135,7 +194,7 @@ void smc_dyn_alg_init(struct smc_dynamic_algorithm *algorithm,
 	smc_ilist_init(&algorithm->explored_targets,
 		sizeof(struct smc_target *), GFP_ATOMIC, NULL);
 	smc_coverage_init(&algorithm->coverage);
-	atomic_set(&algorithm->active_events, 0);
+	kt_atomic32_store_no_ktsan(&algorithm->active_events, 0);
 	init_waitqueue_head(&algorithm->quiescent_waitq);
 	smc_dyn_alg_set_next_target(algorithm,
 		analysis->get_initial_target ?
@@ -244,13 +303,14 @@ void smc_dyn_alg_on_event(struct smc_dynamic_algorithm *algorithm,
 {
 	struct smc_wait_action *action = NULL;
 	struct smc_ilist *new_targets;
+	bool wait_deferred = false;
 
 	if (!algorithm || !algorithm->analysis || !event || !handle)
 		return;
 	if (algorithm->phase != SMC_PHASE_COLLECTING &&
 	    algorithm->phase != SMC_PHASE_TARGET)
 		return;
-	atomic_inc(&algorithm->active_events);
+	kt_atomic32_fetch_add_no_ktsan(&algorithm->active_events, 1);
 
 	smc_runtime_lock(&algorithm->event_lock);
 	if (!algorithm->iteration_going || algorithm->phase == SMC_PHASE_FINISHING)
@@ -299,17 +359,22 @@ void smc_dyn_alg_on_event(struct smc_dynamic_algorithm *algorithm,
 unlock:
 	smc_runtime_unlock(&algorithm->event_lock);
 	if (action) {
-		bool waited = smc_wait_action_wait(action);
-
-		smc_wait_action_post_wait(action, waited);
-		smc_wait_action_destroy(action);
-		smc_runtime_lock(&algorithm->event_lock);
-		if (algorithm->target && (algorithm->target->explored ||
-		    algorithm->target->request_stop))
-			algorithm->stop_requested = true;
-		smc_runtime_unlock(&algorithm->event_lock);
+		if (!handle->pending_wait_action) {
+			handle->pending_wait_algorithm = algorithm;
+			/* The algorithm must be visible before LEAVE sees the action. */
+			smp_wmb();
+			handle->pending_wait_action = action;
+			wait_deferred = true;
+		} else {
+			/* One handle must never own two simultaneous waits. */
+			smc_wait_action_cancel(action);
+			smc_wait_action_post_wait(action, false);
+			smc_wait_action_destroy(action);
+		}
 	}
-	if (atomic_dec_and_test(&algorithm->active_events))
+	if (!wait_deferred &&
+	    kt_atomic32_fetch_add_no_ktsan(&algorithm->active_events,
+		(u32)-1) == 1)
 		wake_up_all(&algorithm->quiescent_waitq);
 }
 
@@ -392,7 +457,7 @@ enum smc_iteration_result smc_alg_finish_iteration(
 		smc_watchpoint_an_cancel_waits(container_of(dynamic->analysis,
 			struct smc_watchpoint_analysis, base));
 	wait_event(dynamic->quiescent_waitq,
-		atomic_read(&dynamic->active_events) == 0);
+		kt_atomic32_load_no_ktsan(&dynamic->active_events) == 0);
 	smc_runtime_lock(&dynamic->event_lock);
 	if (dynamic->iteration_result == SMC_ITERATION_NONE) {
 		if (dynamic->analysis->type == SMC_DYNAMIC_ANALYSIS_WATCHPOINT &&

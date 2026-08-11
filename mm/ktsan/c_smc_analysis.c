@@ -235,20 +235,54 @@ bool smc_wait_action_post_wait(struct smc_wait_action *action, bool result)
 bool smc_wait_action_wait(struct smc_wait_action *action)
 {
 	struct smc_watchpoint_wait_action *watch;
+	unsigned long started;
 	long timeout;
+	int state;
+	bool atomic_context;
+	bool irq_context;
 
 	if (!action || action->type == SMC_WAIT_ACTION_DUMMY)
 		return false;
-	if (action->type != SMC_WAIT_ACTION_WATCHPOINT || in_atomic() || irqs_disabled())
+	if (action->type != SMC_WAIT_ACTION_WATCHPOINT)
 		return false;
 	watch = container_of(action, struct smc_watchpoint_wait_action, base);
+	atomic_context = in_atomic();
+	irq_context = irqs_disabled();
+	if (atomic_context || irq_context) {
+		pr_info("KTSAN SMC WAIT: skipped pid=%d ktid=%u pc=%px addr=%px/%lu atomic=%d irqs_disabled=%d state=%d\n",
+			watch->handle && watch->handle->thread ?
+				((kt_thr_t *)watch->handle->thread)->pid : -1,
+			watch->handle ? watch->handle->id : 0,
+			(void *)watch->mem_access.pc,
+			(void *)watch->mem_access.addr, watch->mem_access.size,
+			atomic_context, irq_context,
+			kt_atomic32_load_no_ktsan(&watch->state));
+		return false;
+	}
+	started = jiffies;
+	pr_info("KTSAN SMC WAIT: begin pid=%d ktid=%u pc=%px addr=%px/%lu timeout=%dms\n",
+		watch->handle && watch->handle->thread ?
+			((kt_thr_t *)watch->handle->thread)->pid : -1,
+		watch->handle ? watch->handle->id : 0,
+		(void *)watch->mem_access.pc, (void *)watch->mem_access.addr,
+		watch->mem_access.size, action->timeout);
 	timeout = wait_event_timeout(watch->waitq,
-		atomic_read(&watch->state) != SMC_WP_WAIT_ARMED,
+		kt_atomic32_load_no_ktsan(&watch->state) != SMC_WP_WAIT_ARMED,
 		msecs_to_jiffies(action->timeout));
 	if (!timeout)
-		atomic_cmpxchg(&watch->state, SMC_WP_WAIT_ARMED,
-			SMC_WP_WAIT_TIMEOUT);
-	return atomic_read(&watch->state) == SMC_WP_WAIT_RACE;
+		kt_atomic32_compare_exchange_no_ktsan(&watch->state,
+			SMC_WP_WAIT_ARMED, SMC_WP_WAIT_TIMEOUT);
+	state = kt_atomic32_load_no_ktsan(&watch->state);
+	pr_info("KTSAN SMC WAIT: end pid=%d ktid=%u elapsed=%ums result=%s state=%d\n",
+		watch->handle && watch->handle->thread ?
+			((kt_thr_t *)watch->handle->thread)->pid : -1,
+		watch->handle ? watch->handle->id : 0,
+		jiffies_to_msecs(jiffies - started),
+		state == SMC_WP_WAIT_RACE ? "race" :
+		state == SMC_WP_WAIT_TIMEOUT ? "timeout" :
+		state == SMC_WP_WAIT_CANCELLED ? "cancelled" : "unknown",
+		state);
+	return state == SMC_WP_WAIT_RACE;
 }
 
 void smc_wait_action_cancel(struct smc_wait_action *action)

@@ -336,15 +336,30 @@ struct smc_watchpoint *smc_watchpoint_global_state_add_if_empty(
 		ordered = current_thr && watchpoint->owner_epoch &&
 			kt_clk_get(&current_thr->clk, watchpoint->owner_id) >=
 			watchpoint->owner_epoch;
-		if (ordered)
+		/* An armed target wait is resolved by the observed competing access. */
+		if (ordered && !watchpoint->action)
 			goto age_watchpoint;
 		old_info = state->other_info[slot];
 		wait_action = watchpoint->action;
+		if (wait_action && kt_atomic32_compare_exchange_no_ktsan(
+			&wait_action->state, SMC_WP_WAIT_ARMED, SMC_WP_WAIT_RACE) ==
+			SMC_WP_WAIT_ARMED)
+			wake_up_all(&wait_action->waitq);
 		smc_watchpoint_clear(watchpoint);
 		memset(&state->other_info[slot], 0, sizeof(state->other_info[slot]));
 		race = true;
 	} else {
 age_watchpoint:
+		/*
+		 * An armed wait owns the slot until a conflicting access, timeout or
+		 * cancellation.  Aging it on unrelated/same-owner events lets a busy
+		 * workload erase the watchpoint while its owner is asleep, after which
+		 * the competing thread merely installs a replacement.
+		 */
+		if (watchpoint->action &&
+		    kt_atomic32_load_no_ktsan(&watchpoint->action->state) ==
+			SMC_WP_WAIT_ARMED)
+			goto unlock;
 		if (--watchpoint->life)
 			goto unlock;
 		smc_watchpoint_clear(watchpoint);
@@ -354,9 +369,9 @@ unlock:
 	smc_wp_unlock(&state->slot_locks[slot]);
 
 	if (installed)
-		pr_info_ratelimited("KTSAN SMC WP: installed slot=%d pc=%px addr=%px/%lu owner=%u access=%s\n",
+		pr_info_ratelimited("KTSAN SMC WP: installed slot=%d pc=%px addr=%px/%lu pid=%d ktid=%u access=%s\n",
 			slot, (void *)access->pc, (void *)access->addr,
-			access->size, handle_id,
+			access->size, current_thr ? current_thr->pid : -1, handle_id,
 			access->is_read ? "read" : "write");
 
 	if (race) {
@@ -367,9 +382,6 @@ unlock:
 		};
 		smc_report_race_access(&cur_info, true, false, false);
 		smc_report_race_access(&old_info, false, true, false);
-		if (wait_action && atomic_cmpxchg(&wait_action->state,
-			SMC_WP_WAIT_ARMED, SMC_WP_WAIT_RACE) == SMC_WP_WAIT_ARMED)
-			wake_up_all(&wait_action->waitq);
 		return (struct smc_watchpoint *)SMC_WATCHPOINT_CONSUMED;
 	}
 	return installed ? watchpoint : NULL;
@@ -538,8 +550,9 @@ void smc_watchpoint_an_cancel_waits(struct smc_watchpoint_analysis *analysis)
 
 		smc_wp_lock(&analysis->global_state.slot_locks[i]);
 		action = analysis->global_state.watchpoints[i].action;
-		if (action && atomic_cmpxchg(&action->state, SMC_WP_WAIT_ARMED,
-			SMC_WP_WAIT_CANCELLED) == SMC_WP_WAIT_ARMED)
+		if (action && kt_atomic32_compare_exchange_no_ktsan(&action->state,
+			SMC_WP_WAIT_ARMED, SMC_WP_WAIT_CANCELLED) ==
+			SMC_WP_WAIT_ARMED)
 			wake_up_all(&action->waitq);
 		smc_wp_unlock(&analysis->global_state.slot_locks[i]);
 	}
@@ -601,6 +614,7 @@ static struct smc_wait_action *smc_watchpoint_create_wait_action(
 	struct smc_target *target, const struct smc_mem_access *access)
 {
 	struct smc_watchpoint_wait_action *action;
+	int slot;
 
 	if (!analysis || !handle || !watchpoint || !access)
 		return NULL;
@@ -610,7 +624,7 @@ static struct smc_wait_action *smc_watchpoint_create_wait_action(
 	action->base.type = SMC_WAIT_ACTION_WATCHPOINT;
 	action->base.timeout = analysis->timeout;
 	init_waitqueue_head(&action->waitq);
-	atomic_set(&action->state, SMC_WP_WAIT_ARMED);
+	kt_atomic32_store_no_ktsan(&action->state, SMC_WP_WAIT_ARMED);
 	action->handle = handle;
 	action->target = target;
 	action->global_state = &analysis->global_state;
@@ -618,8 +632,22 @@ static struct smc_wait_action *smc_watchpoint_create_wait_action(
 	action->watchpoint = watchpoint;
 	action->mem_access = *access;
 	action->generation = handle->local_state_generation;
+	slot = watchpoint - analysis->global_state.watchpoints;
+	if (slot < 0 || slot >= SMC_CONFIG_NUM_WATCHPOINTS) {
+		kfree(action);
+		return NULL;
+	}
+	smc_wp_lock(&analysis->global_state.slot_locks[slot]);
+	if (watchpoint->addr != access->addr ||
+	    watchpoint->size != access->size ||
+	    watchpoint->owner_id != handle->id || watchpoint->action) {
+		smc_wp_unlock(&analysis->global_state.slot_locks[slot]);
+		kfree(action);
+		return NULL;
+	}
 	watchpoint->generation = handle->local_state_generation;
 	watchpoint->action = action;
+	smc_wp_unlock(&analysis->global_state.slot_locks[slot]);
 	return &action->base;
 }
 
@@ -880,7 +908,8 @@ bool smc_watchpoint_wait_action_post_wait(
 {
 	if (!action)
 		return false;
-	if (atomic_read(&action->state) == SMC_WP_WAIT_TIMEOUT && action->target) {
+	if (kt_atomic32_load_no_ktsan(&action->state) == SMC_WP_WAIT_TIMEOUT &&
+	    action->target) {
 		action->target->explored = true;
 		action->target->request_stop = true;
 	}
@@ -897,8 +926,8 @@ void smc_watchpoint_wait_action_cancel(
 
 	if (!action)
 		return;
-	atomic_cmpxchg(&action->state, SMC_WP_WAIT_ARMED,
-		SMC_WP_WAIT_CANCELLED);
+	kt_atomic32_compare_exchange_no_ktsan(&action->state,
+		SMC_WP_WAIT_ARMED, SMC_WP_WAIT_CANCELLED);
 	wake_up_all(&action->waitq);
 	watchpoint = action->watchpoint;
 	if (!watchpoint || !action->global_state)
