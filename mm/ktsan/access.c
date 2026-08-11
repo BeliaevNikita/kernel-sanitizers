@@ -108,39 +108,39 @@ static __always_inline void kt_update_max_shadow_clock(kt_time_t clock)
 	}
 }
 
-atomic64_t kt_total_accesses = ATOMIC64_INIT(0);
-EXPORT_SYMBOL(kt_total_accesses); 
-atomic64_t kt_total_accesses_old = ATOMIC64_INIT(0);
-EXPORT_SYMBOL(kt_total_accesses_old);
+// atomic64_t kt_total_accesses = ATOMIC64_INIT(0);
+// EXPORT_SYMBOL(kt_total_accesses); 
+// atomic64_t kt_total_accesses_old = ATOMIC64_INIT(0);
+// EXPORT_SYMBOL(kt_total_accesses_old);
 
-atomic64_t kt_total_conflict_pairs = ATOMIC64_INIT(0);
-EXPORT_SYMBOL(kt_total_conflict_pairs);
-atomic64_t kt_total_conflict_pairs_old = ATOMIC64_INIT(0);
-EXPORT_SYMBOL(kt_total_conflict_pairs_old);
+// atomic64_t kt_total_conflict_pairs = ATOMIC64_INIT(0);
+// EXPORT_SYMBOL(kt_total_conflict_pairs);
+// atomic64_t kt_total_conflict_pairs_old = ATOMIC64_INIT(0);
+// EXPORT_SYMBOL(kt_total_conflict_pairs_old);
 
-atomic64_t kt_total_conflict_pairs_unordered = ATOMIC64_INIT(0);
-EXPORT_SYMBOL(kt_total_conflict_pairs_unordered);
-atomic64_t kt_total_conflict_pairs_unordered_old = ATOMIC64_INIT(0);
-EXPORT_SYMBOL(kt_total_conflict_pairs_unordered_old);
+// atomic64_t kt_total_conflict_pairs_unordered = ATOMIC64_INIT(0);
+// EXPORT_SYMBOL(kt_total_conflict_pairs_unordered);
+// atomic64_t kt_total_conflict_pairs_unordered_old = ATOMIC64_INIT(0);
+// EXPORT_SYMBOL(kt_total_conflict_pairs_unordered_old);
 
-atomic64_t kt_total_accesses_from_all = ATOMIC64_INIT(0);
-EXPORT_SYMBOL(kt_total_accesses_from_all);
-atomic64_t kt_total_accesses_from_all_old = ATOMIC64_INIT(0);
-EXPORT_SYMBOL(kt_total_accesses_from_all_old);
+// atomic64_t kt_total_accesses_from_all = ATOMIC64_INIT(0);
+// EXPORT_SYMBOL(kt_total_accesses_from_all);
+// atomic64_t kt_total_accesses_from_all_old = ATOMIC64_INIT(0);
+// EXPORT_SYMBOL(kt_total_accesses_from_all_old);
 
-atomic64_t kt_total_conflict_pairs_1_tracked = ATOMIC64_INIT(0);
-EXPORT_SYMBOL(kt_total_conflict_pairs_1_tracked);
-atomic64_t kt_total_conflict_pairs_1_tracked_old = ATOMIC64_INIT(0);
-EXPORT_SYMBOL(kt_total_conflict_pairs_1_tracked_old);
+// atomic64_t kt_total_conflict_pairs_1_tracked = ATOMIC64_INIT(0);
+// EXPORT_SYMBOL(kt_total_conflict_pairs_1_tracked);
+// atomic64_t kt_total_conflict_pairs_1_tracked_old = ATOMIC64_INIT(0);
+// EXPORT_SYMBOL(kt_total_conflict_pairs_1_tracked_old);
 
-atomic64_t kt_total_conflict_pairs_unordered_1_tracked = ATOMIC64_INIT(0);
-EXPORT_SYMBOL(kt_total_conflict_pairs_unordered_1_tracked);
-atomic64_t kt_total_conflict_pairs_unordered_1_tracked_old = ATOMIC64_INIT(0);
-EXPORT_SYMBOL(kt_total_conflict_pairs_unordered_1_tracked_old);
-//extern int ktsan_target_pid;
+// atomic64_t kt_total_conflict_pairs_unordered_1_tracked = ATOMIC64_INIT(0);
+// EXPORT_SYMBOL(kt_total_conflict_pairs_unordered_1_tracked);
+// atomic64_t kt_total_conflict_pairs_unordered_1_tracked_old = ATOMIC64_INIT(0);
+// EXPORT_SYMBOL(kt_total_conflict_pairs_unordered_1_tracked_old);
+// extern int ktsan_target_pid;
 
-atomic64_t kt_total_unique_races = ATOMIC64_INIT(0);
-EXPORT_SYMBOL(kt_total_unique_races);
+// atomic64_t kt_total_unique_races = ATOMIC64_INIT(0);
+// EXPORT_SYMBOL(kt_total_unique_races);
 
 #define MAX_PIDS 256
 
@@ -227,14 +227,14 @@ static __always_inline bool update_one_shadow_slot(kt_thr_t *thr, uptr_t pc,
                 
 		//MY CODE
 		// В kt_access_impl используем функцию is_ktsan_tracked:
-			if (is_ktsan_tracked(kt_thr_get(old.tid)->pid) || is_ktsan_tracked(kt_thr_get(value.tid)->pid)) {
-				atomic64_inc(&kt_total_conflict_pairs_1_tracked);
-			}
-			if (is_ktsan_tracked(kt_thr_get(old.tid)->pid) && is_ktsan_tracked(kt_thr_get(value.tid)->pid)) {
-				atomic64_inc(&kt_total_conflict_pairs);
-				//pr_info("Old tid: %u, Value tid: %u\n", old.tid, value.tid);
-				// dump_shadow_by_address(addr);
-			}
+			// if (is_ktsan_tracked(kt_thr_get(old.tid)->pid) || is_ktsan_tracked(kt_thr_get(value.tid)->pid)) {
+			// 	atomic64_inc(&kt_total_conflict_pairs_1_tracked);
+			// }
+			// if (is_ktsan_tracked(kt_thr_get(old.tid)->pid) && is_ktsan_tracked(kt_thr_get(value.tid)->pid)) {
+			// 	atomic64_inc(&kt_total_conflict_pairs);
+			// 	//pr_info("Old tid: %u, Value tid: %u\n", old.tid, value.tid);
+			// 	// dump_shadow_by_address(addr);
+			// }
 
 		//if (ktsan_target_pid != -1 && ktsan_target_pid == thr->pid) {
 			//    atomic64_inc(&kt_total_conflict_pairs);
@@ -256,14 +256,14 @@ static __always_inline bool update_one_shadow_slot(kt_thr_t *thr, uptr_t pc,
 		if (likely(old.atomic && value.atomic))
 			return false;
 		*/
-		if (is_ktsan_tracked(kt_thr_get(old.tid)->pid) || is_ktsan_tracked(kt_thr_get(value.tid)->pid)) {
-			atomic64_inc(&kt_total_conflict_pairs_unordered_1_tracked);
-		}
-		if (is_ktsan_tracked(kt_thr_get(old.tid)->pid) && is_ktsan_tracked(kt_thr_get(value.tid)->pid)) {
-			atomic64_inc(&kt_total_conflict_pairs_unordered);
-			// pr_info("Race: old.tid=%d thr->tid=%d value.tid=%d addr=0x%lx\n", old.tid, thr->pid,
-			// 		value.tid, addr);
-		}
+		// if (is_ktsan_tracked(kt_thr_get(old.tid)->pid) || is_ktsan_tracked(kt_thr_get(value.tid)->pid)) {
+		// 	atomic64_inc(&kt_total_conflict_pairs_unordered_1_tracked);
+		// }
+		// if (is_ktsan_tracked(kt_thr_get(old.tid)->pid) && is_ktsan_tracked(kt_thr_get(value.tid)->pid)) {
+		// 	atomic64_inc(&kt_total_conflict_pairs_unordered);
+		// 	// pr_info("Race: old.tid=%d thr->tid=%d value.tid=%d addr=0x%lx\n", old.tid, thr->pid,
+		// 	// 		value.tid, addr);
+		// }
 		goto report_race;
 	}
 
@@ -309,11 +309,11 @@ static __always_inline void kt_access_impl(kt_thr_t *thr, uptr_t pc,
 
         //MY CODE
 
-	atomic64_inc(&kt_total_accesses_from_all);
+	// atomic64_inc(&kt_total_accesses_from_all);
 
         if (is_ktsan_tracked(thr->pid)) {
 			set_bit(thr->id, kt_test_tids);
-            atomic64_inc(&kt_total_accesses);
+            // atomic64_inc(&kt_total_accesses);
         }
         //if (ktsan_target_pid != -1 && ktsan_target_pid == thr->pid) {
         //    atomic64_inc(&kt_total_accesses);
@@ -329,9 +329,8 @@ static __always_inline void kt_access_impl(kt_thr_t *thr, uptr_t pc,
 	value.size = size;
 	value.read = read;
 	value.atomic = atomic;
-	/* RACE HUNTER: pc is a compact shadow-side key. The full pc should be
-	 * stored in the Race Hunter pc ring when that bridge is enabled.
-	 */
+	/* Race Hunter resolves this compact epoch key through its PC cache. */
+	kt_rh_record_pc(thr, current_clock, pc);
 	value.pc = current_clock & ((1UL << RH_KT_PC_BITS) - 1);
 
 	stored = false;

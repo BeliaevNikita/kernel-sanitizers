@@ -11,6 +11,8 @@
 #include <linux/mm_types.h>
 #include <linux/mm.h>
 
+#include "c_smc_minimal.h"
+
 //MY CODE
 #define KT_DEBUG 1
 //#define KT_DEBUG 0
@@ -34,7 +36,7 @@
 #define KT_CLOCK_BITS 42
 
 /* RACE HUNTER: disabled by default to keep old KTSAN runtime unchanged. */
-#define KT_ENABLE_RACE_HUNTER 0
+#define KT_ENABLE_RACE_HUNTER 1
 
 /* OLD KTSAN:
  * #define KT_THREAD_ID_BITS 12
@@ -365,6 +367,7 @@ struct kt_thr_s {
 	 */
 
 	/* NEW RACE HUNTER DEFINITION */
+	struct smc_thread_handle smc_handle_storage;
 	struct smc_thread_handle *smc_handle;
 	void *smc_local_state;
 	int smc_inside;
@@ -521,6 +524,9 @@ void kt_rh_mem_access(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
 void kt_rh_shared_mem_access(kt_thr_t *thr, uptr_t cur_pc, uptr_t addr,
 			     size_t size, bool read, bool atomic,
 			     kt_shadow_t old, int epoch_diff);
+void kt_rh_test_shared_mem_access(kt_thr_t *thr, uptr_t prev_pc,
+				  uptr_t cur_pc);
+void kt_rh_record_pc(kt_thr_t *thr, kt_time_t clock, uptr_t pc);
 #else
 static inline void kt_rh_init(void) {}
 static inline void kt_rh_thread_create(kt_thr_t *parent, kt_thr_t *child,
@@ -538,7 +544,11 @@ static inline void kt_rh_shared_mem_access(kt_thr_t *thr, uptr_t cur_pc,
 					   uptr_t addr, size_t size,
 					   bool read, bool atomic,
 					   kt_shadow_t old,
-					   int epoch_diff) {}
+				   int epoch_diff) {}
+static inline void kt_rh_record_pc(kt_thr_t *thr, kt_time_t clock,
+			    uptr_t pc) {}
+static inline void kt_rh_test_shared_mem_access(kt_thr_t *thr,
+					uptr_t prev_pc, uptr_t cur_pc) {}
 #endif
 
 /* Stack. */
@@ -951,5 +961,9 @@ void kt_tests_init(void);
 void kt_tests_run_noinst(void);
 void kt_tests_run_inst(void);
 void kt_tests_run(void);
+
+/* Userspace-driven deterministic workload for the SMC watchpoint test. */
+int kt_smc_race_test_read(unsigned int iterations);
+void kt_smc_race_test_write(unsigned int iterations);
 
 #endif /* __X86_MM_KTSAN_KTSAN_H */

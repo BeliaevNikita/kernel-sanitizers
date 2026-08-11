@@ -13,6 +13,20 @@ static kt_spinlock_t kt_report_lock;
 static unsigned long racy_pc[1024];
 static unsigned nracy_pc;
 
+//MY CODE
+void kt_reset_race_reporting(void)
+{
+    kt_spin_lock(&kt_report_lock);
+    
+    if (nracy_pc > 0) {
+        pr_err("Resetting race cache: clearing %d stored PC pairs\n", nracy_pc / 2);
+        nracy_pc = 0;
+        memset(racy_pc, 0, sizeof(racy_pc));
+    }
+    
+    kt_spin_unlock(&kt_report_lock);
+}
+//
 #if KT_DEBUG
 
 uptr_t sync_objects[KT_MAX_SYNC_COUNT];
@@ -121,8 +135,15 @@ static void print_mop(bool new, bool wr, bool atomic, uptr_t addr, int sz,
 	       (void *)addr, sz, pid, cpu);
 }
 
+#define DISCARD_REPORT 1
+// extern atomic64_t kt_total_unique_races;
+
 void kt_report_race(kt_thr_t *new, kt_race_info_t *info)
 {
+//MY DEBUG ATTEMPT
+#if DISCARD_REPORT
+        return;
+#endif
 	int i, n;
 	kt_thr_t *old;
 	uptr_t new_pc, old_pc;
@@ -167,6 +188,8 @@ void kt_report_race(kt_thr_t *new, kt_race_info_t *info)
 		racy_pc[nracy_pc + 1] = old_pc;
 		kt_atomic32_store_no_ktsan(&nracy_pc, nracy_pc + 2);
 	}
+
+	// atomic64_inc(&kt_total_unique_races);
 
 	pr_err("==================================================================\n");
 	pr_err("ThreadSanitizer: data-race in %s\n\n", function);

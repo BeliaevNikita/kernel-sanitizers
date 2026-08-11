@@ -1,6 +1,13 @@
 # SPDX-License-Identifier: GPL-2.0
 obj-y := access.o 		\
 	 cache.o 		\
+	 c_smc_analysis.o 	\
+	 c_smc_minimal.o 	\
+	 c_smc_global_state.o 	\
+	 c_smc_local_state.o 	\
+	 c_smc_waitlist.o 	\
+	 c_smc_watchpoint.o 	\
+	 c_smc_watchpoint_targets.o \
 	 clk.o 			\
 	 func.o 		\
 	 ktsan.o 		\
@@ -29,6 +36,13 @@ obj-y := access.o 		\
 
 CFLAGS_REMOVE_access.o			= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_cache.o			= -pg -O0 -O1 -O2
+CFLAGS_REMOVE_c_smc_analysis.o		= -pg -O0 -O1 -O2
+CFLAGS_REMOVE_c_smc_minimal.o		= -pg -O0 -O1 -O2
+CFLAGS_REMOVE_c_smc_global_state.o	= -pg -O0 -O1 -O2
+CFLAGS_REMOVE_c_smc_local_state.o	= -pg -O0 -O1 -O2
+CFLAGS_REMOVE_c_smc_waitlist.o		= -pg -O0 -O1 -O2
+CFLAGS_REMOVE_c_smc_watchpoint.o	= -pg -O0 -O1 -O2
+CFLAGS_REMOVE_c_smc_watchpoint_targets.o = -pg -O0 -O1 -O2
 CFLAGS_REMOVE_clk.o			= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_func.o			= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_ktsan.o			= -pg -O0 -O1 -O2
@@ -57,6 +71,13 @@ CFLAGS_REMOVE_trace.o			= -pg -O0 -O1 -O2
 
 CFLAGS_access.o			= -O3 -fomit-frame-pointer
 CFLAGS_cache.o			= -O3 -fomit-frame-pointer
+CFLAGS_c_smc_analysis.o		= -O3 -fomit-frame-pointer
+CFLAGS_c_smc_minimal.o		= -O3 -fomit-frame-pointer
+CFLAGS_c_smc_global_state.o	= -O3 -fomit-frame-pointer
+CFLAGS_c_smc_local_state.o	= -O3 -fomit-frame-pointer
+CFLAGS_c_smc_waitlist.o		= -O3 -fomit-frame-pointer
+CFLAGS_c_smc_watchpoint.o		= -O3 -fomit-frame-pointer
+CFLAGS_c_smc_watchpoint_targets.o = -O3 -fomit-frame-pointer
 CFLAGS_clk.o			= -O3 -fomit-frame-pointer
 CFLAGS_func.o			= -O3 -fomit-frame-pointer
 CFLAGS_ktsan.o			= -O3 -fomit-frame-pointer
@@ -84,5 +105,13 @@ CFLAGS_thr.o			= -O3 -fomit-frame-pointer
 CFLAGS_trace.o			= -O3 -fomit-frame-pointer
 
 KTSAN_SANITIZE := n
+KTSAN_SANITIZE_race_hunter.o := n
+KTSAN_SANITIZE_c_smc_analysis.o := n
+KTSAN_SANITIZE_c_smc_minimal.o := n
+KTSAN_SANITIZE_c_smc_global_state.o := n
+KTSAN_SANITIZE_c_smc_local_state.o := n
+KTSAN_SANITIZE_c_smc_waitlist.o := n
+KTSAN_SANITIZE_c_smc_watchpoint.o := n
+KTSAN_SANITIZE_c_smc_watchpoint_targets.o := n
 KTSAN_SANITIZE_tests_inst.o = y
 KCOV_INSTRUMENT := n

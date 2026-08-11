@@ -119,12 +119,11 @@ void __init ktsan_init_early(void)
 	kt_thr_pool_init();
 
 	kt_stack_depot_init(&ctx->stack_depot);
-	/* RACE HUNTER: keep the bridge disabled until the adapted runtime is
-	 * linked, but initialize the fields explicitly for readability.
+	/* The target-driven SMC runtime allocates targets and is initialized
+	 * later, after slab and the initial KTSAN thread are available.
 	 */
 	ctx->smc_algorithm = NULL;
 	ctx->smc_enabled = KT_ENABLE_RACE_HUNTER;
-	kt_rh_init();
 }
 
 static void ktsan_report_memory_usage(void)
@@ -182,6 +181,7 @@ void ktsan_init(void)
 	BUG_ON(ctx->enabled);
 	inside = __test_and_set_bit(0, &thr->inside);
 	BUG_ON(inside != 0);
+	kt_rh_init();
 
 	kt_stat_init();
 	kt_supp_init();
