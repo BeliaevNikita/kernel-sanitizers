@@ -262,6 +262,14 @@ static void smc_add_new_targets(struct smc_dynamic_algorithm *algorithm,
 	kfree(targets);
 }
 
+static void smc_discard_explored_targets(struct smc_dynamic_algorithm *algorithm)
+{
+	struct smc_target *target;
+
+	while (smc_ilist_pop_front(&algorithm->explored_targets, &target))
+		smc_destroy_target(target);
+}
+
 static void smc_discard_iteration_targets(struct smc_dynamic_algorithm *algorithm)
 {
 	struct smc_target *target;
@@ -420,21 +428,30 @@ int smc_alg_start_iteration(struct smc_algorithm *algorithm)
 {
 	struct smc_dynamic_algorithm *dynamic;
 	struct smc_target *next;
+	bool collecting = false;
 
 	if (!algorithm || algorithm->type != SMC_ALGORITHM_DYNAMIC)
 		return -EINVAL;
 	dynamic = &algorithm->data.dynamic;
 	smc_runtime_lock(&dynamic->event_lock);
-	if (dynamic->phase != SMC_PHASE_IDLE) {
+	if (dynamic->phase != SMC_PHASE_IDLE &&
+	    dynamic->phase != SMC_PHASE_COMPLETE) {
 		smc_runtime_unlock(&dynamic->event_lock);
 		return -EBUSY;
 	}
 	next = smc_waitlist_get_next(dynamic->waitlist);
 	if (!next) {
-		dynamic->phase = SMC_PHASE_COMPLETE;
-		dynamic->restart_required = false;
-		smc_runtime_unlock(&dynamic->event_lock);
-		return -ENOENT;
+		next = dynamic->analysis->get_initial_target ?
+			dynamic->analysis->get_initial_target(dynamic->analysis) : NULL;
+		if (!next) {
+			dynamic->phase = SMC_PHASE_COMPLETE;
+			dynamic->restart_required = false;
+			smc_runtime_unlock(&dynamic->event_lock);
+			return -ENOMEM;
+		}
+		smc_discard_iteration_targets(dynamic);
+		smc_discard_explored_targets(dynamic);
+		collecting = true;
 	}
 	dynamic->iteration_generation++;
 	if (!dynamic->iteration_generation)
@@ -444,10 +461,16 @@ int smc_alg_start_iteration(struct smc_algorithm *algorithm)
 	dynamic->stop_requested = false;
 	dynamic->restart_required = false;
 	dynamic->iteration_going = true;
-	dynamic->phase = SMC_PHASE_TARGET;
+	dynamic->phase = collecting ? SMC_PHASE_COLLECTING : SMC_PHASE_TARGET;
 	smc_dyn_alg_set_next_target(dynamic, next);
-	dynamic->restart_count++;
+	if (collecting)
+		dynamic->prep_iterations++;
+	else
+		dynamic->restart_count++;
 	smc_runtime_unlock(&dynamic->event_lock);
+	if (collecting)
+		pr_info("KTSAN SMC: queue empty, started collecting iteration %llu\n",
+			dynamic->iteration_id);
 	return 0;
 }
 

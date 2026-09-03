@@ -916,7 +916,7 @@ void ktsan_memblock_free(void *addr, unsigned long size, bool write_to_shadow);
 void kt_access(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size, bool read,
 	       bool atomic);
 void kt_access_range(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
-		     bool read);
+		     bool read, int rh_access_type);
 
 void kt_access_range_imitate(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
 			     bool read);
