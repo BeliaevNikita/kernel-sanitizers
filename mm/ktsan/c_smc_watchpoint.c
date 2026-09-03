@@ -693,6 +693,13 @@ struct smc_wait_action *smc_watchpoint_an_transfer(
 	}
 	if (event->type != SMC_MEM_ACCESS_TYPE)
 		return NULL;
+	/* A reset describes allocator lifetime bookkeeping, not a memory access
+	 * performed by the program.  KTSAN still updates its shadow and can report
+	 * access-vs-free races, but a slab free must not arm or consume a Race
+	 * Hunter watchpoint.
+	 */
+	if (event->data.mem_access.typ == SMC_ACCESS_RESET)
+		return NULL;
 	should_set = smc_watchpoint_target_has_pc(target,
 		event->data.mem_access.pc);
 	if (target && target->type == SMC_RANDOM_SHARED_TARGET_TYPE && wp_local)

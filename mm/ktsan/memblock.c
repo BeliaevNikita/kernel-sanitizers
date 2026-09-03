@@ -102,7 +102,8 @@ void kt_memblock_free(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
 	kt_tab_sync_t *sync;
 
 	if (write_to_shadow)
-		kt_access_range(thr, pc, addr, size, false);
+		kt_access_range(thr, pc, addr, size, false,
+				KT_RH_ACCESS_RESET);
 
 	memblock = kt_tab_access(&kt_ctx.memblock_tab, addr, NULL, true);
 

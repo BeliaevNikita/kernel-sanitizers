@@ -377,7 +377,7 @@ void kt_access(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size, bool read,
 }
 
 void kt_access_range(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
-		     bool read)
+		     bool read, int rh_access_type)
 {
 	kt_time_t current_clock;
 	kt_shadow_t *slots;
@@ -396,7 +396,7 @@ void kt_access_range(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
 	 * shadow memory per grain below.
 	 */
 	kt_rh_mem_access(thr, pc, addr, size, read, false,
-			 KT_RH_ACCESS_REGULAR);
+			 rh_access_type);
 
 	/* Handle unaligned beginning, if any. */
 	if (addr & (KT_GRAIN - 1)) {

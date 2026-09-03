@@ -419,7 +419,9 @@ static void ktsan_memblock_alloc(void *addr, unsigned long size,
 				 bool write_to_shadow)
 {
 	ENTER(KT_ENTER_DISABLED);
-	BUG_ON(thr->event_disable_depth != 0);
+	// BUG_ON(thr->event_disable_depth != 0);
+	if (thr->event_disable_depth != 0)
+		write_to_shadow = false;
 	kt_memblock_alloc(thr, pc, (uptr_t)addr, (size_t)size, write_to_shadow);
 	LEAVE();
 }
@@ -427,7 +429,9 @@ static void ktsan_memblock_alloc(void *addr, unsigned long size,
 void ktsan_memblock_free(void *addr, unsigned long size, bool write_to_shadow)
 {
 	ENTER(KT_ENTER_DISABLED);
-	BUG_ON(thr->event_disable_depth != 0);
+	// BUG_ON(thr->event_disable_depth != 0);
+	if (thr->event_disable_depth != 0)
+		write_to_shadow = false;
 	kt_memblock_free(thr, pc, (uptr_t)addr, (size_t)size, write_to_shadow);
 	LEAVE();
 }
@@ -981,7 +985,8 @@ EXPORT_SYMBOL(ktsan_read16);
 void ktsan_read_range(void *addr, size_t sz)
 {
 	ENTER(KT_ENTER_NORMAL);
-	kt_access_range(thr, pc, (uptr_t)addr, sz, true);
+	kt_access_range(thr, pc, (uptr_t)addr, sz, true,
+			KT_RH_ACCESS_REGULAR);
 	LEAVE();
 }
 EXPORT_SYMBOL(ktsan_read_range);
@@ -1030,7 +1035,8 @@ EXPORT_SYMBOL(ktsan_write16);
 void ktsan_write_range(void *addr, size_t sz)
 {
 	ENTER(KT_ENTER_NORMAL);
-	kt_access_range(thr, pc, (uptr_t)addr, sz, false);
+	kt_access_range(thr, pc, (uptr_t)addr, sz, false,
+			KT_RH_ACCESS_REGULAR);
 	LEAVE();
 }
 EXPORT_SYMBOL(ktsan_write_range);
