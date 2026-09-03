@@ -99,9 +99,24 @@ void smc_thread_handle_init(struct smc_thread_handle *handle, u32 id)
  * NULL и уже очищенный handle безопасны; сам handle не освобождается. */
 void smc_thread_handle_destroy(struct smc_thread_handle *handle)
 {
+	struct smc_wait_action *action;
+	struct smc_dynamic_algorithm *algorithm;
+
 	if (!handle)
 		return;
-	smc_thread_handle_process_wait(handle);
+	action = handle->pending_wait_action;
+	algorithm = handle->pending_wait_algorithm;
+	handle->pending_wait_action = NULL;
+	handle->pending_wait_algorithm = NULL;
+	if (action) {
+		smc_wait_action_cancel(action);
+		smc_wait_action_post_wait(action, false);
+		smc_wait_action_destroy(action);
+		if (algorithm &&
+		    kt_atomic32_fetch_add_no_ktsan(&algorithm->active_events,
+						   (u32)-1) == 1)
+			wake_up_all(&algorithm->quiescent_waitq);
+	}
 	if (!handle->local_state)
 		return;
 	smc_local_state_destroy(handle->local_state);

@@ -527,6 +527,7 @@ void kt_rh_shared_mem_access(kt_thr_t *thr, uptr_t cur_pc, uptr_t addr,
 void kt_rh_test_shared_mem_access(kt_thr_t *thr, uptr_t prev_pc,
 				  uptr_t cur_pc);
 void kt_rh_record_pc(kt_thr_t *thr, kt_time_t clock, uptr_t pc);
+void kt_rh_safe_point(kt_thr_t *thr);
 #else
 static inline void kt_rh_init(void) {}
 static inline void kt_rh_thread_create(kt_thr_t *parent, kt_thr_t *child,
@@ -546,7 +547,8 @@ static inline void kt_rh_shared_mem_access(kt_thr_t *thr, uptr_t cur_pc,
 					   kt_shadow_t old,
 				   int epoch_diff) {}
 static inline void kt_rh_record_pc(kt_thr_t *thr, kt_time_t clock,
-			    uptr_t pc) {}
+				    uptr_t pc) {}
+static inline void kt_rh_safe_point(kt_thr_t *thr) {}
 static inline void kt_rh_test_shared_mem_access(kt_thr_t *thr,
 					uptr_t prev_pc, uptr_t cur_pc) {}
 #endif
