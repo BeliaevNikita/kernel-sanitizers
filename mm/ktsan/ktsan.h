@@ -55,6 +55,11 @@
 #define KT_RH_ACCESS_IMITATE 1
 #define KT_RH_ACCESS_RESET 2
 
+enum kt_rh_pc_mode {
+	KT_RH_PC_MODE_HASH,
+	KT_RH_PC_MODE_RING,
+};
+
 #define KT_SYNC_TAB_SIZE 196613
 #define KT_MEMBLOCK_TAB_SIZE 196613
 
@@ -526,7 +531,10 @@ void kt_rh_shared_mem_access(kt_thr_t *thr, uptr_t cur_pc, uptr_t addr,
 			     kt_shadow_t old, int epoch_diff);
 void kt_rh_test_shared_mem_access(kt_thr_t *thr, uptr_t prev_pc,
 				  uptr_t cur_pc);
-void kt_rh_record_pc(kt_thr_t *thr, kt_time_t clock, uptr_t pc);
+u32 kt_rh_record_pc(kt_thr_t *thr, kt_time_t clock, uptr_t pc);
+enum kt_rh_pc_mode kt_rh_get_pc_mode(void);
+int kt_rh_set_pc_mode(enum kt_rh_pc_mode mode);
+void kt_rh_print_and_reset_pc_statistics(void);
 void kt_rh_safe_point(kt_thr_t *thr);
 #else
 static inline void kt_rh_init(void) {}
@@ -546,8 +554,14 @@ static inline void kt_rh_shared_mem_access(kt_thr_t *thr, uptr_t cur_pc,
 					   bool read, bool atomic,
 					   kt_shadow_t old,
 				   int epoch_diff) {}
-static inline void kt_rh_record_pc(kt_thr_t *thr, kt_time_t clock,
-				    uptr_t pc) {}
+static inline u32 kt_rh_record_pc(kt_thr_t *thr, kt_time_t clock,
+				   uptr_t pc) { return 0; }
+static inline enum kt_rh_pc_mode kt_rh_get_pc_mode(void)
+{
+	return KT_RH_PC_MODE_HASH;
+}
+static inline int kt_rh_set_pc_mode(enum kt_rh_pc_mode mode) { return -EINVAL; }
+static inline void kt_rh_print_and_reset_pc_statistics(void) {}
 static inline void kt_rh_safe_point(kt_thr_t *thr) {}
 static inline void kt_rh_test_shared_mem_access(kt_thr_t *thr,
 					uptr_t prev_pc, uptr_t cur_pc) {}

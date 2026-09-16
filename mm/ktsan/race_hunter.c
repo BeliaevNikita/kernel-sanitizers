@@ -9,6 +9,8 @@
 
 #define KT_RH_PC_CACHE_BITS 13
 #define KT_RH_PC_CACHE_SIZE (1U << KT_RH_PC_CACHE_BITS)
+#define KT_RH_PC_RING_SIZE (1U << RH_KT_PC_BITS)
+#define KT_RH_PC_RING_MASK (KT_RH_PC_RING_SIZE - 1)
 
 struct kt_rh_pc_entry {
 	u64 tag;
@@ -16,6 +18,12 @@ struct kt_rh_pc_entry {
 };
 
 static struct kt_rh_pc_entry kt_rh_pc_cache[KT_RH_PC_CACHE_SIZE];
+static struct kt_rh_pc_entry kt_rh_pc_ring[KT_RH_PC_RING_SIZE];
+static u64 kt_rh_pc_ring_head;
+static u64 kt_rh_pc_ring_hits;
+static u64 kt_rh_pc_ring_misses;
+static u64 kt_rh_pc_ring_wraps;
+static enum kt_rh_pc_mode kt_rh_pc_mode = KT_RH_PC_MODE_HASH;
 extern bool is_ktsan_tracked(pid_t pid);
 
 static u64 kt_rh_pc_tag(u32 tid, kt_time_t clock)
@@ -23,37 +31,99 @@ static u64 kt_rh_pc_tag(u32 tid, kt_time_t clock)
 	return ((u64)tid << RH_KT_CLOCK_BITS) | clock;
 }
 
-void kt_rh_record_pc(kt_thr_t *thr, kt_time_t clock, uptr_t pc)
+enum kt_rh_pc_mode kt_rh_get_pc_mode(void)
+{
+	return READ_ONCE(kt_rh_pc_mode);
+}
+
+int kt_rh_set_pc_mode(enum kt_rh_pc_mode mode)
+{
+	struct smc_dynamic_algorithm *dynamic;
+	enum smc_iteration_phase phase;
+	bool initial_collecting = false;
+
+	if (mode != KT_RH_PC_MODE_HASH && mode != KT_RH_PC_MODE_RING)
+		return -EINVAL;
+	if (kt_ctx.smc_algorithm) {
+		dynamic = &kt_ctx.smc_algorithm->data.dynamic;
+		phase = smc_alg_get_phase(kt_ctx.smc_algorithm);
+		initial_collecting = phase == SMC_PHASE_COLLECTING &&
+			dynamic->iteration_id == 1 &&
+			kt_atomic32_load_no_ktsan(&dynamic->active_events) == 0;
+		if (phase != SMC_PHASE_IDLE && phase != SMC_PHASE_COMPLETE &&
+		    !initial_collecting)
+			return -EBUSY;
+	}
+	WRITE_ONCE(kt_rh_pc_mode, mode);
+	return 0;
+}
+
+u32 kt_rh_record_pc(kt_thr_t *thr, kt_time_t clock, uptr_t pc)
 {
 	struct kt_rh_pc_entry *entry;
 	u64 tag;
+	u64 position;
+	u32 index;
 
 	if (!thr || !is_ktsan_tracked(thr->pid))
-		return;
+		return 0;
 	tag = kt_rh_pc_tag(thr->id, clock);
+	if (READ_ONCE(kt_rh_pc_mode) == KT_RH_PC_MODE_RING) {
+		position = kt_atomic64_fetch_add_no_ktsan(&kt_rh_pc_ring_head, 1);
+		index = position & KT_RH_PC_RING_MASK;
+		if (index == 0 && position != 0)
+			kt_atomic64_fetch_add_no_ktsan(&kt_rh_pc_ring_wraps, 1);
+		entry = &kt_rh_pc_ring[index];
+		kt_atomic64_store_no_ktsan(&entry->tag, 0);
+		kt_atomic64_store_no_ktsan(&entry->pc, pc);
+		asm volatile("" ::: "memory");
+		kt_atomic64_store_no_ktsan(&entry->tag, tag);
+		return index;
+	}
 	entry = &kt_rh_pc_cache[hash_64(tag, KT_RH_PC_CACHE_BITS)];
 	kt_atomic64_store_no_ktsan(&entry->tag, 0);
 	kt_atomic64_store_no_ktsan(&entry->pc, pc);
 	/* x86 stores are ordered; the compiler barrier publishes pc before tag. */
 	asm volatile("" ::: "memory");
 	kt_atomic64_store_no_ktsan(&entry->tag, tag);
+	return clock & KT_RH_PC_RING_MASK;
 }
 
-static uptr_t kt_rh_lookup_pc(u32 tid, kt_time_t clock)
+static uptr_t kt_rh_lookup_pc(u32 tid, kt_time_t clock, u32 shadow_pc)
 {
 	u64 tag = kt_rh_pc_tag(tid, clock);
-	struct kt_rh_pc_entry *entry =
-		&kt_rh_pc_cache[hash_64(tag, KT_RH_PC_CACHE_BITS)];
+	struct kt_rh_pc_entry *entry;
 	uptr_t pc;
+	bool ring = READ_ONCE(kt_rh_pc_mode) == KT_RH_PC_MODE_RING;
 
-	if (kt_atomic64_load_no_ktsan(&entry->tag) != tag)
+	entry = ring ? &kt_rh_pc_ring[shadow_pc & KT_RH_PC_RING_MASK] :
+		&kt_rh_pc_cache[hash_64(tag, KT_RH_PC_CACHE_BITS)];
+
+	if (kt_atomic64_load_no_ktsan(&entry->tag) != tag) {
+		if (ring)
+			kt_atomic64_fetch_add_no_ktsan(&kt_rh_pc_ring_misses, 1);
 		return 0;
+	}
 	asm volatile("" ::: "memory");
 	pc = kt_atomic64_load_no_ktsan(&entry->pc);
 	asm volatile("" ::: "memory");
-	if (kt_atomic64_load_no_ktsan(&entry->tag) != tag)
+	if (kt_atomic64_load_no_ktsan(&entry->tag) != tag) {
+		if (ring)
+			kt_atomic64_fetch_add_no_ktsan(&kt_rh_pc_ring_misses, 1);
 		return 0;
+	}
+	if (ring)
+		kt_atomic64_fetch_add_no_ktsan(&kt_rh_pc_ring_hits, 1);
 	return pc;
+}
+
+void kt_rh_print_and_reset_pc_statistics(void)
+{
+	pr_info("KTSAN SMC PC: mode=%s ring_hits=%llu ring_misses=%llu ring_wraps=%llu\n",
+		READ_ONCE(kt_rh_pc_mode) == KT_RH_PC_MODE_RING ? "ring" : "hash",
+		kt_atomic64_exchange_no_ktsan(&kt_rh_pc_ring_hits, 0),
+		kt_atomic64_exchange_no_ktsan(&kt_rh_pc_ring_misses, 0),
+		kt_atomic64_exchange_no_ktsan(&kt_rh_pc_ring_wraps, 0));
 }
 
 /* RACE HUNTER: central event dispatch guard. It keeps the adapted Race Hunter
@@ -204,7 +274,7 @@ void kt_rh_shared_mem_access(kt_thr_t *thr, uptr_t cur_pc, uptr_t addr,
 	struct smc_event event = {
 		.type = SMC_SHARED_MEM_ACCESS_TYPE,
 		.data.shared_mem_access = {
-			.prev_pc = kt_rh_lookup_pc(old.tid, old.clock),
+			.prev_pc = kt_rh_lookup_pc(old.tid, old.clock, old.pc),
 			.cur_pc = cur_pc,
 			.epoch_diff = epoch_diff,
 			.context = NULL,

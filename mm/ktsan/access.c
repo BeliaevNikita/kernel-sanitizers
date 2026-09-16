@@ -330,8 +330,7 @@ static __always_inline void kt_access_impl(kt_thr_t *thr, uptr_t pc,
 	value.read = read;
 	value.atomic = atomic;
 	/* Race Hunter resolves this compact epoch key through its PC cache. */
-	kt_rh_record_pc(thr, current_clock, pc);
-	value.pc = current_clock & ((1UL << RH_KT_PC_BITS) - 1);
+	value.pc = kt_rh_record_pc(thr, current_clock, pc);
 
 	stored = false;
 	for (i = 0; i < KT_SHADOW_SLOTS; i++)
@@ -451,8 +450,7 @@ void kt_access_range_imitate(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
 	value.size = KT_ACCESS_SIZE_8;
 	value.read = read;
 	value.atomic = false;
-	/* RACE HUNTER: pc-ring index placeholder. */
-	value.pc = current_clock & ((1UL << RH_KT_PC_BITS) - 1);
+	value.pc = kt_rh_record_pc(thr, current_clock, pc);
 
 	for (; size; size -= KT_GRAIN) {
 		for (i = 0; i < KT_SHADOW_SLOTS; i++, slots++) {

@@ -58,6 +58,7 @@ static void print_and_reset_test_tids(void)
 static void reset_ktsan_counters(void)
 {
 	smc_minimal_print_and_reset_statistics();
+	kt_rh_print_and_reset_pc_statistics();
     // pr_info("kt_total_accesses: %lld\n", atomic64_read(&kt_total_accesses));
     // pr_info("kt_total_conflict_pairs: %lld\n", atomic64_read(&kt_total_conflict_pairs));
 	// pr_info("kt_total_conflict_pairs_unordered: %lld\n", atomic64_read(&kt_total_conflict_pairs_unordered));
