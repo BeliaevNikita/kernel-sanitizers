@@ -11,6 +11,7 @@
 
 static int ktsan_target_pids[MAX_PIDS];
 static int ktsan_num_pids = 0;
+static bool ktsan_pid_filter_enabled = true;
 
 EXPORT_SYMBOL(ktsan_target_pids);
 EXPORT_SYMBOL(ktsan_num_pids);
@@ -84,6 +85,9 @@ bool is_ktsan_tracked(pid_t pid)
 {
     bool tracked = false;
     int i;
+
+    if (!READ_ONCE(ktsan_pid_filter_enabled))
+        return true;
     
     for (i = 0; i < ktsan_num_pids; i++) {
         if (ktsan_target_pids[i] == pid) {
@@ -226,6 +230,60 @@ out:
 
 static struct kobj_attribute pid_attribute = __ATTR(pid, 0644, pid_show, pid_store);
 
+static ssize_t pid_filter_show(struct kobject *kobj,
+			       struct kobj_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%u\n",
+			 READ_ONCE(ktsan_pid_filter_enabled));
+}
+
+static ssize_t pid_filter_store(struct kobject *kobj,
+				struct kobj_attribute *attr,
+				const char *buf, size_t count)
+{
+	bool enabled;
+
+	if (kstrtobool(buf, &enabled))
+		return -EINVAL;
+	WRITE_ONCE(ktsan_pid_filter_enabled, enabled);
+	pr_info("KTSAN: PID filtering %s\n", enabled ? "enabled" : "disabled");
+	return count;
+}
+
+static struct kobj_attribute pid_filter_attribute =
+	__ATTR(pid_filter, 0644, pid_filter_show, pid_filter_store);
+
+static ssize_t pc_mode_show(struct kobject *kobj,
+			    struct kobj_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%s\n",
+		kt_rh_get_pc_mode() == KT_RH_PC_MODE_RING ? "ring" : "hash");
+}
+
+static ssize_t pc_mode_store(struct kobject *kobj,
+			     struct kobj_attribute *attr,
+			     const char *buf, size_t count)
+{
+	enum kt_rh_pc_mode mode;
+	int ret;
+
+	if (sysfs_streq(buf, "hash"))
+		mode = KT_RH_PC_MODE_HASH;
+	else if (sysfs_streq(buf, "ring"))
+		mode = KT_RH_PC_MODE_RING;
+	else
+		return -EINVAL;
+	ret = kt_rh_set_pc_mode(mode);
+	if (ret)
+		return ret;
+	pr_info("KTSAN: PC storage mode set to %s\n",
+		mode == KT_RH_PC_MODE_RING ? "ring" : "hash");
+	return count;
+}
+
+static struct kobj_attribute pc_mode_attribute =
+	__ATTR(pc_mode, 0644, pc_mode_show, pc_mode_store);
+
 static const char *smc_phase_name(enum smc_iteration_phase phase)
 {
 	switch (phase) {
@@ -320,10 +378,12 @@ static int __init ktsan_sysfs_init(void)
         kobject_put(ktsan_kobj);
         return -ENOMEM;
     }
+	if (sysfs_create_file(ktsan_kobj, &pid_filter_attribute.attr))
+		goto remove_pid;
+	if (sysfs_create_file(ktsan_kobj, &pc_mode_attribute.attr))
+		goto remove_pid_filter;
 	if (sysfs_create_file(ktsan_kobj, &smc_control_attribute.attr)) {
-		sysfs_remove_file(ktsan_kobj, &pid_attribute.attr);
-		kobject_put(ktsan_kobj);
-		return -ENOMEM;
+		goto remove_pc_mode;
 	}
 	if (sysfs_create_file(ktsan_kobj, &smc_race_read_attribute.attr))
 		goto remove_smc_control;
@@ -336,6 +396,10 @@ static int __init ktsan_sysfs_init(void)
     pr_info("  echo -123 > /sys/kernel/ktsan/pid    # Remove PID 123\n");
     pr_info("  echo clear > /sys/kernel/ktsan/pid   # Clear all PIDs\n");
     pr_info("  echo 123 456 789 > /sys/kernel/ktsan/pid  # Add multiple\n");
+	pr_info("  echo 0 > /sys/kernel/ktsan/pid_filter # Disable PID filtering\n");
+	pr_info("  echo 1 > /sys/kernel/ktsan/pid_filter # Enable PID filtering\n");
+	pr_info("  echo hash > /sys/kernel/ktsan/pc_mode # Use PC hash table\n");
+	pr_info("  echo ring > /sys/kernel/ktsan/pc_mode # Store ring index in shadow\n");
 	pr_info("  echo finish > /sys/kernel/ktsan/smc_control # finish run\n");
 	pr_info("  echo start > /sys/kernel/ktsan/smc_control  # start next target\n");
 	pr_info("  cat smc_race_read & echo run > smc_race_write # SMC race test\n");
@@ -346,6 +410,11 @@ remove_smc_race_read:
 	sysfs_remove_file(ktsan_kobj, &smc_race_read_attribute.attr);
 remove_smc_control:
 	sysfs_remove_file(ktsan_kobj, &smc_control_attribute.attr);
+remove_pc_mode:
+	sysfs_remove_file(ktsan_kobj, &pc_mode_attribute.attr);
+remove_pid_filter:
+	sysfs_remove_file(ktsan_kobj, &pid_filter_attribute.attr);
+remove_pid:
 	sysfs_remove_file(ktsan_kobj, &pid_attribute.attr);
 	kobject_put(ktsan_kobj);
 	return -ENOMEM;
