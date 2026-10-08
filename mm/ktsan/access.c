@@ -177,7 +177,7 @@ static __always_inline bool update_one_shadow_slot(kt_thr_t *thr, uptr_t pc,
     
 #if PID_FILTER
 	// Игнорируем доступы неотслеживаемых пидов, чтобы теневая память не засорялась
-	if (!is_ktsan_tracked(kt_thr_get(value.tid)->pid)) {
+	if (!is_ktsan_tracked(thr->pid)) {
 		return true;
 	}
 #endif
