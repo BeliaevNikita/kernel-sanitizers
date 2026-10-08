@@ -7,6 +7,7 @@
 #include "ktsan.h"
 #include "c_smc_algorithm.h"
 #include "c_smc_log.h"
+#include "c_smc_watchpoint.h"
 
 #define MAX_PIDS 512
 
@@ -286,6 +287,94 @@ static ssize_t pc_mode_store(struct kobject *kobj,
 static struct kobj_attribute pc_mode_attribute =
 	__ATTR(pc_mode, 0644, pc_mode_show, pc_mode_store);
 
+static ssize_t waitlist_mode_show(struct kobject *kobj,
+				  struct kobj_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%s\n",
+		smc_alg_get_waitlist_type(kt_ctx.smc_algorithm) ==
+		SMC_WAITLIST_TARGET_DIFFERENCE ? "fitness" : "dfs");
+}
+
+static ssize_t waitlist_mode_store(struct kobject *kobj,
+				   struct kobj_attribute *attr,
+				   const char *buf, size_t count)
+{
+	enum smc_waitlist_type type;
+	int ret;
+
+	if (sysfs_streq(buf, "dfs"))
+		type = SMC_WAITLIST_DFS;
+	else if (sysfs_streq(buf, "fitness"))
+		type = SMC_WAITLIST_TARGET_DIFFERENCE;
+	else
+		return -EINVAL;
+	ret = smc_alg_set_waitlist_type(kt_ctx.smc_algorithm, type);
+	if (ret)
+		return ret;
+	pr_info("KTSAN SMC: waitlist mode set to %s\n",
+		type == SMC_WAITLIST_TARGET_DIFFERENCE ? "fitness" : "dfs");
+	return count;
+}
+
+static struct kobj_attribute waitlist_mode_attribute =
+	__ATTR(waitlist_mode, 0644, waitlist_mode_show, waitlist_mode_store);
+
+static struct smc_watchpoint_analysis *ktsan_watchpoint_analysis(void)
+{
+	struct smc_algorithm *algorithm = kt_ctx.smc_algorithm;
+	struct smc_dynamic_analysis *analysis;
+
+	if (!algorithm || algorithm->type != SMC_ALGORITHM_DYNAMIC)
+		return NULL;
+	analysis = algorithm->data.dynamic.analysis;
+	if (!analysis || analysis->type != SMC_DYNAMIC_ANALYSIS_WATCHPOINT)
+		return NULL;
+	return container_of(analysis, struct smc_watchpoint_analysis, base);
+}
+
+static ssize_t fitness_limit_show(struct kobject *kobj,
+				  struct kobj_attribute *attr, char *buf)
+{
+	struct smc_watchpoint_analysis *analysis = ktsan_watchpoint_analysis();
+
+	if (!analysis)
+		return -ENODEV;
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+		smc_watchpoint_an_get_fitness_limit(analysis));
+}
+
+static ssize_t fitness_limit_store(struct kobject *kobj,
+				   struct kobj_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct smc_watchpoint_analysis *analysis = ktsan_watchpoint_analysis();
+	struct smc_dynamic_algorithm *dynamic;
+	unsigned int limit;
+	bool initial_collecting;
+	int ret;
+
+	if (!analysis)
+		return -ENODEV;
+	if (kstrtouint(buf, 10, &limit) ||
+	    limit >= (1U << (RH_KT_CLOCK_BITS - 1)))
+		return -EINVAL;
+	dynamic = &kt_ctx.smc_algorithm->data.dynamic;
+	initial_collecting = dynamic->phase == SMC_PHASE_COLLECTING &&
+		dynamic->iteration_id == 1 &&
+		kt_atomic32_load_no_ktsan(&dynamic->active_events) == 0;
+	if (!initial_collecting && dynamic->phase != SMC_PHASE_IDLE &&
+	    dynamic->phase != SMC_PHASE_COMPLETE)
+		return -EBUSY;
+	ret = smc_watchpoint_an_set_fitness_limit(analysis, (int)limit);
+	if (ret)
+		return ret;
+	pr_info("KTSAN SMC: fitness limit set to %u\n", limit);
+	return count;
+}
+
+static struct kobj_attribute fitness_limit_attribute =
+	__ATTR(fitness_limit, 0644, fitness_limit_show, fitness_limit_store);
+
 static const char *smc_phase_name(enum smc_iteration_phase phase)
 {
 	switch (phase) {
@@ -294,6 +383,7 @@ static const char *smc_phase_name(enum smc_iteration_phase phase)
 	case SMC_PHASE_TARGET: return "target";
 	case SMC_PHASE_FINISHING: return "finishing";
 	case SMC_PHASE_COMPLETE: return "complete";
+	case SMC_PHASE_COUNT: return "invalid";
 	}
 	return "unknown";
 }
@@ -303,18 +393,59 @@ static ssize_t smc_control_show(struct kobject *kobj,
 {
 	struct smc_algorithm *algorithm = kt_ctx.smc_algorithm;
 	struct smc_dynamic_algorithm *dynamic;
+	struct smc_watchpoint_analysis *watchpoint;
+	u64 dropped_other;
+	u64 dropped_event_callbacks = 0;
+	u64 processed_events;
+	unsigned int i;
 
 	if (!algorithm)
 		return scnprintf(buf, PAGE_SIZE, "unavailable\n");
 	smc_log_flush();
 	dynamic = &algorithm->data.dynamic;
+	watchpoint = ktsan_watchpoint_analysis();
+	dropped_other = kt_atomic64_load_no_ktsan(
+		&dynamic->iteration_dropped_by_type[SMC_DROP_COMPLETION]);
+	for (i = 0; i < SMC_EVENT_TYPE_COUNT; i++) {
+		dropped_event_callbacks += kt_atomic64_load_no_ktsan(
+			&dynamic->iteration_dropped_by_type[i]);
+		if (i != SMC_MEM_ACCESS_TYPE && i != SMC_SHARED_MEM_ACCESS_TYPE &&
+		    i != SMC_FENCE_TYPE)
+			dropped_other += kt_atomic64_load_no_ktsan(
+				&dynamic->iteration_dropped_by_type[i]);
+	}
+	processed_events = dynamic->iteration_event_attempts >=
+		dropped_event_callbacks ? dynamic->iteration_event_attempts -
+		dropped_event_callbacks : 0;
 	return scnprintf(buf, PAGE_SIZE,
-		"phase=%s iteration=%llu restart_required=%d stop_requested=%d queued=%u temporary=%lu result=%d\n",
+		"phase=%s iteration=%llu restart_required=%d stop_requested=%d queued=%u temporary=%lu result=%d waitlist=%s fitness_limit=%d analysis_valid=%d dropped_events=%llu total_events=%llu processed_events=%llu dropped_event_callbacks=%llu dropped_mem=%llu dropped_shared=%llu dropped_fence=%llu dropped_other=%llu dropped_collecting=%llu dropped_target=%llu dropped_finishing=%llu\n",
 		smc_phase_name(smc_alg_get_phase(algorithm)), dynamic->iteration_id,
 		smc_alg_restart_required(algorithm), dynamic->stop_requested,
 		smc_waitlist_size(dynamic->waitlist),
 		(unsigned long)smc_ilist_size(&dynamic->iteration_targets),
-		dynamic->iteration_result);
+		dynamic->iteration_result,
+		smc_alg_get_waitlist_type(algorithm) ==
+			SMC_WAITLIST_TARGET_DIFFERENCE ? "fitness" : "dfs",
+		watchpoint ? smc_watchpoint_an_get_fitness_limit(watchpoint) : 0,
+		(dynamic->phase == SMC_PHASE_IDLE || dynamic->phase == SMC_PHASE_COMPLETE) &&
+			dynamic->iteration_result != SMC_ITERATION_NONE &&
+			dynamic->iteration_result != SMC_ITERATION_ABORTED &&
+			dynamic->iteration_result != SMC_ITERATION_CONTENDED,
+		dynamic->iteration_dropped_events,
+		dynamic->iteration_event_attempts, processed_events,
+		dropped_event_callbacks,
+		kt_atomic64_load_no_ktsan(&dynamic->iteration_dropped_by_type[
+			SMC_MEM_ACCESS_TYPE]),
+		kt_atomic64_load_no_ktsan(&dynamic->iteration_dropped_by_type[
+			SMC_SHARED_MEM_ACCESS_TYPE]),
+		kt_atomic64_load_no_ktsan(&dynamic->iteration_dropped_by_type[
+			SMC_FENCE_TYPE]), dropped_other,
+		kt_atomic64_load_no_ktsan(&dynamic->iteration_dropped_by_phase[
+			SMC_PHASE_COLLECTING]),
+		kt_atomic64_load_no_ktsan(&dynamic->iteration_dropped_by_phase[
+			SMC_PHASE_TARGET]),
+		kt_atomic64_load_no_ktsan(&dynamic->iteration_dropped_by_phase[
+			SMC_PHASE_FINISHING]));
 }
 
 static ssize_t smc_control_store(struct kobject *kobj,
@@ -369,6 +500,18 @@ static struct kobj_attribute smc_race_read_attribute =
 	__ATTR(smc_race_read, 0444, smc_race_read_show, NULL);
 static struct kobj_attribute smc_race_write_attribute =
 	__ATTR(smc_race_write, 0200, NULL, smc_race_write_store);
+
+static ssize_t benchmark_mode_show(struct kobject *kobj,
+				   struct kobj_attribute *attr, char *buf)
+{
+	if (!kt_ctx.enabled)
+		return scnprintf(buf, PAGE_SIZE, "invalid-disabled-ktsan\n");
+	return scnprintf(buf, PAGE_SIZE, "%s\n",
+			 KT_ENABLE_RACE_HUNTER ? "ktsan_rh" : "ktsan");
+}
+
+static struct kobj_attribute benchmark_mode_attribute =
+	__ATTR(benchmark_mode, 0444, benchmark_mode_show, NULL);
 static struct kobject *ktsan_kobj;
 
 static int __init ktsan_sysfs_init(void)
@@ -385,13 +528,19 @@ static int __init ktsan_sysfs_init(void)
 		goto remove_pid;
 	if (sysfs_create_file(ktsan_kobj, &pc_mode_attribute.attr))
 		goto remove_pid_filter;
-	if (sysfs_create_file(ktsan_kobj, &smc_control_attribute.attr)) {
+	if (sysfs_create_file(ktsan_kobj, &waitlist_mode_attribute.attr))
 		goto remove_pc_mode;
+	if (sysfs_create_file(ktsan_kobj, &fitness_limit_attribute.attr))
+		goto remove_waitlist_mode;
+	if (sysfs_create_file(ktsan_kobj, &smc_control_attribute.attr)) {
+		goto remove_fitness_limit;
 	}
 	if (sysfs_create_file(ktsan_kobj, &smc_race_read_attribute.attr))
 		goto remove_smc_control;
 	if (sysfs_create_file(ktsan_kobj, &smc_race_write_attribute.attr))
 		goto remove_smc_race_read;
+	if (sysfs_create_file(ktsan_kobj, &benchmark_mode_attribute.attr))
+		goto remove_smc_race_write;
     
     pr_info("KTSAN: sysfs interface created at /sys/kernel/ktsan/pid\n");
     pr_info("KTSAN: Usage examples:\n");
@@ -403,16 +552,25 @@ static int __init ktsan_sysfs_init(void)
 	pr_info("  echo 1 > /sys/kernel/ktsan/pid_filter # Enable PID filtering\n");
 	pr_info("  echo hash > /sys/kernel/ktsan/pc_mode # Use PC hash table\n");
 	pr_info("  echo ring > /sys/kernel/ktsan/pc_mode # Store ring index in shadow\n");
+	pr_info("  echo fitness > /sys/kernel/ktsan/waitlist_mode # Prioritize fitness\n");
+	pr_info("  echo dfs > /sys/kernel/ktsan/waitlist_mode # Use plain DFS\n");
+	pr_info("  echo 1000 > /sys/kernel/ktsan/fitness_limit # Set fitness cutoff\n");
 	pr_info("  echo finish > /sys/kernel/ktsan/smc_control # finish run\n");
 	pr_info("  echo start > /sys/kernel/ktsan/smc_control  # start next target\n");
 	pr_info("  cat smc_race_read & echo run > smc_race_write # SMC race test\n");
     
     return 0;
 
+remove_smc_race_write:
+	sysfs_remove_file(ktsan_kobj, &smc_race_write_attribute.attr);
 remove_smc_race_read:
 	sysfs_remove_file(ktsan_kobj, &smc_race_read_attribute.attr);
 remove_smc_control:
 	sysfs_remove_file(ktsan_kobj, &smc_control_attribute.attr);
+remove_fitness_limit:
+	sysfs_remove_file(ktsan_kobj, &fitness_limit_attribute.attr);
+remove_waitlist_mode:
+	sysfs_remove_file(ktsan_kobj, &waitlist_mode_attribute.attr);
 remove_pc_mode:
 	sysfs_remove_file(ktsan_kobj, &pc_mode_attribute.attr);
 remove_pid_filter:

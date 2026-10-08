@@ -72,9 +72,13 @@ kt_thr_t *kt_thr_create(kt_thr_t *thr, int pid)
 	/* RACE HUNTER: initialize per-thread bridge state without changing the
 	 * original KTSAN thread lifecycle.
 	 */
+#if KT_ENABLE_RACE_HUNTER
 	smc_thread_handle_init(&new->smc_handle_storage, new->id);
 	new->smc_handle_storage.thread = new;
 	new->smc_handle = &new->smc_handle_storage;
+#else
+	new->smc_handle = NULL;
+#endif
 	new->smc_local_state = NULL;
 	new->smc_inside = 0;
 
@@ -104,7 +108,9 @@ void kt_thr_destroy(kt_thr_t *thr, kt_thr_t *old)
 		kt_seqcount_bug(old, 0, "read_disable_depth on thr end");
 	BUG_ON(old->seqcount_ignore != 0);
 	BUG_ON(old->interrupt_depth != 0);
+#if KT_ENABLE_RACE_HUNTER
 	smc_thread_handle_destroy(&old->smc_handle_storage);
+#endif
 
 	kt_spin_lock(&pool->lock);
 	list_add_tail(&old->quarantine_list, &pool->quarantine);

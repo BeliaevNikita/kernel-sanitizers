@@ -7,4 +7,9 @@ config KTSAN
 	bool "ThreadSanitizer: dynamic data race error detector"
 	default n
 
+config KTSAN_RACE_HUNTER
+	bool "RaceHunter scheduling analysis"
+	depends on KTSAN
+	default y
+
 endif

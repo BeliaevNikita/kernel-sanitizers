@@ -36,7 +36,7 @@
 #define KT_CLOCK_BITS 42
 
 /* RACE HUNTER: disabled by default to keep old KTSAN runtime unchanged. */
-#define KT_ENABLE_RACE_HUNTER 1
+#define KT_ENABLE_RACE_HUNTER IS_ENABLED(CONFIG_KTSAN_RACE_HUNTER)
 
 /* OLD KTSAN:
  * #define KT_THREAD_ID_BITS 12
