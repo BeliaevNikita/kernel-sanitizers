@@ -529,6 +529,9 @@ EXPORT_SYMBOL(ktsan_seqcount_ignore_end);
 
 void ktsan_thread_fence(ktsan_memory_order_t mo)
 {
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_thread_fence_no_ktsan(mo);
+
 	ENTER(KT_ENTER_NORMAL);
 	kt_thread_fence(thr, pc, mo);
 	LEAVE();
@@ -537,6 +540,9 @@ EXPORT_SYMBOL(ktsan_thread_fence);
 
 void ktsan_atomic8_store(void *addr, u8 value, ktsan_memory_order_t mo)
 {
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic8_store_no_ktsan(addr, value);
+
 	ENTER(KT_ENTER_NORMAL);
 	kt_atomic8_store(thr, pc, addr, value, mo);
 	LEAVE();
@@ -548,6 +554,9 @@ EXPORT_SYMBOL(ktsan_atomic8_store);
 
 void ktsan_atomic16_store(void *addr, u16 value, ktsan_memory_order_t mo)
 {
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic16_store_no_ktsan(addr, value);
+
 	ENTER(KT_ENTER_NORMAL);
 	kt_atomic16_store(thr, pc, addr, value, mo);
 	LEAVE();
@@ -559,6 +568,9 @@ EXPORT_SYMBOL(ktsan_atomic16_store);
 
 void ktsan_atomic32_store(void *addr, u32 value, ktsan_memory_order_t mo)
 {
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic32_store_no_ktsan(addr, value);
+
 	ENTER(KT_ENTER_NORMAL);
 	kt_atomic32_store(thr, pc, addr, value, mo);
 	LEAVE();
@@ -570,6 +582,9 @@ EXPORT_SYMBOL(ktsan_atomic32_store);
 
 void ktsan_atomic64_store(void *addr, u64 value, ktsan_memory_order_t mo)
 {
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic64_store_no_ktsan(addr, value);
+
 	ENTER(KT_ENTER_NORMAL);
 	kt_atomic64_store(thr, pc, addr, value, mo);
 	LEAVE();
@@ -582,6 +597,8 @@ EXPORT_SYMBOL(ktsan_atomic64_store);
 u8 ktsan_atomic8_load(const void *addr, ktsan_memory_order_t mo)
 {
 	u8 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic8_load_no_ktsan(addr);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic8_load(thr, pc, addr, mo);
@@ -596,6 +613,8 @@ EXPORT_SYMBOL(ktsan_atomic8_load);
 u16 ktsan_atomic16_load(const void *addr, ktsan_memory_order_t mo)
 {
 	u16 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic16_load_no_ktsan(addr);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic16_load(thr, pc, addr, mo);
@@ -610,6 +629,8 @@ EXPORT_SYMBOL(ktsan_atomic16_load);
 u32 ktsan_atomic32_load(const void *addr, ktsan_memory_order_t mo)
 {
 	u32 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic32_load_no_ktsan(addr);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic32_load(thr, pc, addr, mo);
@@ -624,6 +645,8 @@ EXPORT_SYMBOL(ktsan_atomic32_load);
 u64 ktsan_atomic64_load(const void *addr, ktsan_memory_order_t mo)
 {
 	u64 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic64_load_no_ktsan(addr);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic64_load(thr, pc, addr, mo);
@@ -638,6 +661,8 @@ EXPORT_SYMBOL(ktsan_atomic64_load);
 u8 ktsan_atomic8_exchange(void *addr, u8 value, ktsan_memory_order_t mo)
 {
 	u8 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic8_exchange_no_ktsan(addr, value);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic8_exchange(thr, pc, addr, value, mo);
@@ -652,6 +677,8 @@ EXPORT_SYMBOL(ktsan_atomic8_exchange);
 u16 ktsan_atomic16_exchange(void *addr, u16 value, ktsan_memory_order_t mo)
 {
 	u16 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic16_exchange_no_ktsan(addr, value);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic16_exchange(thr, pc, addr, value, mo);
@@ -666,6 +693,8 @@ EXPORT_SYMBOL(ktsan_atomic16_exchange);
 u32 ktsan_atomic32_exchange(void *addr, u32 value, ktsan_memory_order_t mo)
 {
 	u32 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic32_exchange_no_ktsan(addr, value);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic32_exchange(thr, pc, addr, value, mo);
@@ -680,6 +709,8 @@ EXPORT_SYMBOL(ktsan_atomic32_exchange);
 u64 ktsan_atomic64_exchange(void *addr, u64 value, ktsan_memory_order_t mo)
 {
 	u64 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic64_exchange_no_ktsan(addr, value);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic64_exchange(thr, pc, addr, value, mo);
@@ -695,6 +726,8 @@ u8 ktsan_atomic8_compare_exchange(void *addr, u8 old, u8 new,
 				  ktsan_memory_order_t mo)
 {
 	u8 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic8_compare_exchange_no_ktsan(addr, old, new);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic8_compare_exchange(thr, pc, addr, old, new, mo);
@@ -710,6 +743,8 @@ u16 ktsan_atomic16_compare_exchange(void *addr, u16 old, u16 new,
 				    ktsan_memory_order_t mo)
 {
 	u16 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic16_compare_exchange_no_ktsan(addr, old, new);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic16_compare_exchange(thr, pc, addr, old, new, mo);
@@ -725,6 +760,8 @@ u32 ktsan_atomic32_compare_exchange(void *addr, u32 old, u32 new,
 				    ktsan_memory_order_t mo)
 {
 	u32 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic32_compare_exchange_no_ktsan(addr, old, new);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic32_compare_exchange(thr, pc, addr, old, new, mo);
@@ -740,6 +777,8 @@ u64 ktsan_atomic64_compare_exchange(void *addr, u64 old, u64 new,
 				    ktsan_memory_order_t mo)
 {
 	u64 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic64_compare_exchange_no_ktsan(addr, old, new);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic64_compare_exchange(thr, pc, addr, old, new, mo);
@@ -754,6 +793,8 @@ EXPORT_SYMBOL(ktsan_atomic64_compare_exchange);
 u8 ktsan_atomic8_fetch_add(void *addr, u8 value, ktsan_memory_order_t mo)
 {
 	u8 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic8_fetch_add_no_ktsan(addr, value);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic8_fetch_add(thr, pc, addr, value, mo);
@@ -768,6 +809,8 @@ EXPORT_SYMBOL(ktsan_atomic8_fetch_add);
 u16 ktsan_atomic16_fetch_add(void *addr, u16 value, ktsan_memory_order_t mo)
 {
 	u16 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic16_fetch_add_no_ktsan(addr, value);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic16_fetch_add(thr, pc, addr, value, mo);
@@ -782,6 +825,8 @@ EXPORT_SYMBOL(ktsan_atomic16_fetch_add);
 u32 ktsan_atomic32_fetch_add(void *addr, u32 value, ktsan_memory_order_t mo)
 {
 	u32 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic32_fetch_add_no_ktsan(addr, value);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic32_fetch_add(thr, pc, addr, value, mo);
@@ -796,6 +841,8 @@ EXPORT_SYMBOL(ktsan_atomic32_fetch_add);
 u64 ktsan_atomic64_fetch_add(void *addr, u64 value, ktsan_memory_order_t mo)
 {
 	u64 rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic64_fetch_add_no_ktsan(addr, value);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic64_fetch_add(thr, pc, addr, value, mo);
@@ -809,6 +856,9 @@ EXPORT_SYMBOL(ktsan_atomic64_fetch_add);
 
 void ktsan_atomic_set_bit(void *addr, long nr, ktsan_memory_order_t mo)
 {
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic_set_bit_no_ktsan(addr, nr);
+
 	ENTER(KT_ENTER_NORMAL);
 	kt_atomic_set_bit(thr, pc, addr, nr, mo);
 	LEAVE();
@@ -820,6 +870,9 @@ EXPORT_SYMBOL(ktsan_atomic_set_bit);
 
 void ktsan_atomic_clear_bit(void *addr, long nr, ktsan_memory_order_t mo)
 {
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic_clear_bit_no_ktsan(addr, nr);
+
 	ENTER(KT_ENTER_NORMAL);
 	kt_atomic_clear_bit(thr, pc, addr, nr, mo);
 	LEAVE();
@@ -831,6 +884,9 @@ EXPORT_SYMBOL(ktsan_atomic_clear_bit);
 
 void ktsan_atomic_change_bit(void *addr, long nr, ktsan_memory_order_t mo)
 {
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic_change_bit_no_ktsan(addr, nr);
+
 	ENTER(KT_ENTER_NORMAL);
 	kt_atomic_change_bit(thr, pc, addr, nr, mo);
 	LEAVE();
@@ -843,6 +899,8 @@ EXPORT_SYMBOL(ktsan_atomic_change_bit);
 int ktsan_atomic_fetch_set_bit(void *addr, long nr, ktsan_memory_order_t mo)
 {
 	int rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic_fetch_set_bit_no_ktsan(addr, nr);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic_fetch_set_bit(thr, pc, addr, nr, mo);
@@ -857,6 +915,8 @@ EXPORT_SYMBOL(ktsan_atomic_fetch_set_bit);
 int ktsan_atomic_fetch_clear_bit(void *addr, long nr, ktsan_memory_order_t mo)
 {
 	int rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic_fetch_clear_bit_no_ktsan(addr, nr);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic_fetch_clear_bit(thr, pc, addr, nr, mo);
@@ -871,6 +931,8 @@ EXPORT_SYMBOL(ktsan_atomic_fetch_clear_bit);
 int ktsan_atomic_fetch_change_bit(void *addr, long nr, ktsan_memory_order_t mo)
 {
 	int rv = 0;
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return kt_atomic_fetch_change_bit_no_ktsan(addr, nr);
 
 	ENTER(KT_ENTER_NORMAL);
 	rv = kt_atomic_fetch_change_bit(thr, pc, addr, nr, mo);
@@ -932,6 +994,9 @@ EXPORT_SYMBOL(ktsan_irq_restore);
 
 void ktsan_percpu_acquire(void *addr)
 {
+	if (unlikely(in_interrupt() || irqs_disabled() || !preemptible()))
+		return;
+
 	ENTER(KT_ENTER_NORMAL);
 	kt_percpu_acquire(thr, pc, (uptr_t)addr);
 	LEAVE();
