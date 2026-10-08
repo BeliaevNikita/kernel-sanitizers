@@ -1,3 +1,4 @@
+#include "c_smc_log.h"
 #include <linux/slab.h>
 
 #include "c_smc_analysis.h"
@@ -284,7 +285,7 @@ void smc_waitlist_print_and_reset_statistics(struct smc_waitlist *waitlist)
 	fitness = &waitlist->data.target_difference;
 	for (bucket = 0; bucket < SMC_WAITLIST_KEYS; bucket++) {
 		if (fitness->queued[bucket] || fitness->selected[bucket])
-			pr_info("KTSAN SMC fitness: bucket=%u queued=%llu selected=%llu pending=%u\n",
+			smc_info("KTSAN SMC fitness: bucket=%u queued=%llu selected=%llu pending=%u\n",
 				bucket, fitness->queued[bucket],
 				fitness->selected[bucket],
 				smc_dfs_waitlist_size(&fitness->buckets[bucket]));

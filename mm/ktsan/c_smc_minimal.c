@@ -1,3 +1,4 @@
+#include "c_smc_log.h"
 #include "ktsan.h"
 
 #include <linux/kernel.h>
@@ -46,7 +47,7 @@ static void smc_debug_target_added(const struct smc_dynamic_algorithm *algorithm
 		const struct smc_shared_intrusion_target *intrusion =
 			container_of(target, struct smc_shared_intrusion_target, base);
 
-		pr_info("KTSAN SMC: target added #%d type=intrusion first_pc=%px pcs=%u fitness=%d queued=%u\n",
+		smc_info("KTSAN SMC: target added #%d type=intrusion first_pc=%px pcs=%u fitness=%d queued=%u\n",
 			algorithm->reached_targets,
 			(void *)smc_shared_intrusion_target_first_pc(intrusion),
 			smc_shared_intrusion_target_size(intrusion),
@@ -58,14 +59,14 @@ static void smc_debug_target_added(const struct smc_dynamic_algorithm *algorithm
 		const struct smc_shared_monitoring_target *monitoring =
 			container_of(target, struct smc_shared_monitoring_target, base);
 
-		pr_info("KTSAN SMC: target added #%d type=monitoring first_pc=%px second_pc=%px fitness=%d queued=%u\n",
+		smc_info("KTSAN SMC: target added #%d type=monitoring first_pc=%px second_pc=%px fitness=%d queued=%u\n",
 			algorithm->reached_targets, (void *)monitoring->first_pc,
 			(void *)monitoring->second_pc, target->raw_fitness,
 			smc_waitlist_size(algorithm->waitlist));
 		break;
 	}
 	default:
-		pr_info("KTSAN SMC: target added #%d type=%d fitness=%d queued=%u\n",
+		smc_info("KTSAN SMC: target added #%d type=%d fitness=%d queued=%u\n",
 			algorithm->reached_targets, target->type,
 			target->raw_fitness, smc_waitlist_size(algorithm->waitlist));
 		break;
@@ -383,7 +384,7 @@ void smc_minimal_init(struct smc_algorithm **algorithm)
 	smc_dyn_alg_init(&smc_runtime.data.dynamic,
 		&watchpoint_analysis.base);
 	*algorithm = &smc_runtime;
-	pr_info("KTSAN: target-driven SMC watchpoint analysis initialized\n");
+	smc_info("KTSAN: target-driven SMC watchpoint analysis initialized\n");
 }
 
 /** Сохраняет цели текущего запуска отдельно от основной очереди. */
@@ -648,7 +649,7 @@ int smc_alg_start_iteration(struct smc_algorithm *algorithm)
 		dynamic->restart_count++;
 	smc_runtime_unlock(&dynamic->event_lock);
 	if (collecting)
-		pr_info("KTSAN SMC: queue empty, started collecting iteration %llu\n",
+		smc_info("KTSAN SMC: queue empty, started collecting iteration %llu\n",
 			dynamic->iteration_id);
 	return 0;
 }
@@ -681,7 +682,7 @@ enum smc_iteration_result smc_alg_finish_iteration(
 			kt_atomic32_load_no_ktsan(&dynamic->active_events) == 0,
 			30 * HZ);
 		if (!quiescent)
-			pr_err("KTSAN SMC: waiting for %d active events in iteration %llu phase=%d stop_requested=%d\n",
+			smc_err("KTSAN SMC: waiting for %d active events in iteration %llu phase=%d stop_requested=%d\n",
 				kt_atomic32_load_no_ktsan(&dynamic->active_events),
 				dynamic->iteration_id, dynamic->phase,
 				dynamic->stop_requested);
@@ -775,14 +776,14 @@ void smc_minimal_print_and_reset_statistics(void)
 	if (!algorithm->analysis)
 		return;
 
-	pr_info("KTSAN SMC: iterations=%d queued=%u generated=%d\n",
+	smc_info("KTSAN SMC: iterations=%d queued=%u generated=%d\n",
 		algorithm->restart_count,
 		smc_waitlist_size(algorithm->waitlist),
 		algorithm->reached_targets);
-	pr_info("KTSAN SMC targets: duplicates=%llu insert_failures=%llu\n",
+	smc_info("KTSAN SMC targets: duplicates=%llu insert_failures=%llu\n",
 		kt_atomic64_load_no_ktsan(&algorithm->duplicate_targets),
 		kt_atomic64_load_no_ktsan(&algorithm->target_insert_failures));
-	pr_info("KTSAN SMC waits: executed=%llu cancelled_pending=%llu active=%u\n",
+	smc_info("KTSAN SMC waits: executed=%llu cancelled_pending=%llu active=%u\n",
 		kt_atomic64_load_no_ktsan(&algorithm->waits_executed),
 		kt_atomic64_load_no_ktsan(&algorithm->waits_cancelled),
 		kt_atomic32_load_no_ktsan(&algorithm->active_events));

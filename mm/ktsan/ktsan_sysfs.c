@@ -6,6 +6,7 @@
 #include <linux/bitmap.h>
 #include "ktsan.h"
 #include "c_smc_algorithm.h"
+#include "c_smc_log.h"
 
 #define MAX_PIDS 512
 
@@ -305,6 +306,7 @@ static ssize_t smc_control_show(struct kobject *kobj,
 
 	if (!algorithm)
 		return scnprintf(buf, PAGE_SIZE, "unavailable\n");
+	smc_log_flush();
 	dynamic = &algorithm->data.dynamic;
 	return scnprintf(buf, PAGE_SIZE,
 		"phase=%s iteration=%llu restart_required=%d stop_requested=%d queued=%u temporary=%lu result=%d\n",

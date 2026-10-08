@@ -1,3 +1,4 @@
+#include "c_smc_log.h"
 #include <linux/slab.h>
 
 #include "c_smc_watchpoint_targets.h"
@@ -284,7 +285,7 @@ static void intrusion_print(const struct smc_target *base)
 	struct smc_ilist_const_iter iter;
 	struct smc_ilist_const_iter end;
 
-	pr_info("KTSAN SMC: intrusion target fitness=%d size=%lu limit=%u\n",
+	smc_info("KTSAN SMC: intrusion target fitness=%d size=%lu limit=%u\n",
 		base->raw_fitness, smc_ilist_size(&target->pc_list),
 		target->list_limit);
 	end = smc_ilist_cend(&target->pc_list);
@@ -294,7 +295,7 @@ static void intrusion_print(const struct smc_target *base)
 		const struct smc_intrusion_info *item =
 			smc_ilist_const_iter_get(&iter);
 
-		pr_info("KTSAN SMC:   intrusion pc=%px state=%px\n",
+		smc_info("KTSAN SMC:   intrusion pc=%px state=%px\n",
 			(void *)item->pc, item->info);
 	}
 }

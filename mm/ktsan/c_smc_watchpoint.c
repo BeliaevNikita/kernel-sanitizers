@@ -1,3 +1,4 @@
+#include "c_smc_log.h"
 #include "ktsan.h"
 
 #include <linux/kernel.h>
@@ -117,7 +118,7 @@ void smc_report_race_access(const struct smc_other_info *report,
 	if (!report)
 		return;
 	access = &report->access_info;
-	pr_err_ratelimited("KTSAN SMC: %s%s%s %s at pc=%px addr=%px/%lu thread=%d\n",
+	smc_err_ratelimited("KTSAN SMC: %s%s%s %s at pc=%px addr=%px/%lu thread=%d\n",
 		is_first ? "data race: " : "",
 		is_old ? "previous " : "", postponed ? "postponed " : "",
 		access->is_read ? "read" : "write", (void *)access->pc,
@@ -142,7 +143,7 @@ void smc_watchpoint_local_state_print(
 	const struct smc_watchpoint_local_state *state)
 {
 	if (state)
-		pr_info("KTSAN SMC: wp local skip=%d nth=%lu\n",
+		smc_info("KTSAN SMC: wp local skip=%d nth=%lu\n",
 			state->skip_count, state->nth_event_count);
 }
 
@@ -244,7 +245,7 @@ void smc_watchpoint_global_state_print(
 		return;
 	for (i = 0; i < SMC_CONFIG_NUM_WATCHPOINTS; i++)
 		if (state->watchpoints[i].addr)
-			pr_info("KTSAN SMC: wp[%d]=%px/%lu owner=%u\n", i,
+			smc_info("KTSAN SMC: wp[%d]=%px/%lu owner=%u\n", i,
 				(void *)state->watchpoints[i].addr,
 				state->watchpoints[i].size,
 				state->watchpoints[i].owner_id);
@@ -369,7 +370,7 @@ unlock:
 	smc_wp_unlock(&state->slot_locks[slot]);
 
 	if (installed)
-		pr_info_ratelimited("KTSAN SMC WP: installed slot=%d pc=%px addr=%px/%lu pid=%d ktid=%u access=%s\n",
+		smc_info_ratelimited("KTSAN SMC WP: installed slot=%d pc=%px addr=%px/%lu pid=%d ktid=%u access=%s\n",
 			slot, (void *)access->pc, (void *)access->addr,
 			access->size, current_thr ? current_thr->pid : -1, handle_id,
 			access->is_read ? "read" : "write");
@@ -886,7 +887,7 @@ void smc_watchpoint_an_print_statistics(
 	if (!base)
 		return;
 	analysis = container_of(base, struct smc_watchpoint_analysis, base);
-	pr_info("KTSAN SMC WP: races=%d accesses=%d shared=%lld targets=%lld\n",
+	smc_info("KTSAN SMC WP: races=%d accesses=%d shared=%lld targets=%lld\n",
 		kt_atomic32_load_no_ktsan(&analysis->stats.race_found),
 		kt_atomic32_load_no_ktsan(&analysis->stats.access_target),
 		kt_atomic64_load_no_ktsan(&analysis->stats.shared_accesses),

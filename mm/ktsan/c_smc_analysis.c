@@ -1,3 +1,4 @@
+#include "c_smc_log.h"
 #include "ktsan.h"
 
 #include <linux/slab.h>
@@ -119,7 +120,7 @@ void smc_target_print(const struct smc_target *target)
 		target->ops->print(target);
 		return;
 	}
-	pr_info("KTSAN SMC: target type=%d fitness=%d reached=%d explored=%d\n",
+	smc_info("KTSAN SMC: target type=%d fitness=%d reached=%d explored=%d\n",
 		target->type, target->raw_fitness, target->reached,
 		target->explored);
 }
@@ -249,7 +250,7 @@ bool smc_wait_action_wait(struct smc_wait_action *action)
 	atomic_context = in_atomic();
 	irq_context = irqs_disabled();
 	if (atomic_context || irq_context) {
-		pr_info("KTSAN SMC WAIT: skipped pid=%d ktid=%u pc=%px addr=%px/%lu atomic=%d irqs_disabled=%d state=%d\n",
+		smc_info("KTSAN SMC WAIT: skipped pid=%d ktid=%u pc=%px addr=%px/%lu atomic=%d irqs_disabled=%d state=%d\n",
 			watch->handle && watch->handle->thread ?
 				((kt_thr_t *)watch->handle->thread)->pid : -1,
 			watch->handle ? watch->handle->id : 0,
@@ -260,7 +261,7 @@ bool smc_wait_action_wait(struct smc_wait_action *action)
 		return false;
 	}
 	started = jiffies;
-	pr_info("KTSAN SMC WAIT: begin pid=%d ktid=%u pc=%px addr=%px/%lu timeout=%dms\n",
+	smc_info("KTSAN SMC WAIT: begin pid=%d ktid=%u pc=%px addr=%px/%lu timeout=%dms\n",
 		watch->handle && watch->handle->thread ?
 			((kt_thr_t *)watch->handle->thread)->pid : -1,
 		watch->handle ? watch->handle->id : 0,
@@ -273,7 +274,7 @@ bool smc_wait_action_wait(struct smc_wait_action *action)
 		kt_atomic32_compare_exchange_no_ktsan(&watch->state,
 			SMC_WP_WAIT_ARMED, SMC_WP_WAIT_TIMEOUT);
 	state = kt_atomic32_load_no_ktsan(&watch->state);
-	pr_info("KTSAN SMC WAIT: end pid=%d ktid=%u elapsed=%ums result=%s state=%d\n",
+	smc_info("KTSAN SMC WAIT: end pid=%d ktid=%u elapsed=%ums result=%s state=%d\n",
 		watch->handle && watch->handle->thread ?
 			((kt_thr_t *)watch->handle->thread)->pid : -1,
 		watch->handle ? watch->handle->id : 0,

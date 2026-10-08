@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+#include "c_smc_log.h"
 #include "ktsan.h"
 #include <asm/processor.h>
 #include <linux/hash.h>
@@ -119,7 +120,7 @@ static uptr_t kt_rh_lookup_pc(u32 tid, kt_time_t clock, u32 shadow_pc)
 
 void kt_rh_print_and_reset_pc_statistics(void)
 {
-	pr_info("KTSAN SMC PC: mode=%s ring_hits=%llu ring_misses=%llu ring_wraps=%llu\n",
+	smc_info("KTSAN SMC PC: mode=%s ring_hits=%llu ring_misses=%llu ring_wraps=%llu\n",
 		READ_ONCE(kt_rh_pc_mode) == KT_RH_PC_MODE_RING ? "ring" : "hash",
 		kt_atomic64_exchange_no_ktsan(&kt_rh_pc_ring_hits, 0),
 		kt_atomic64_exchange_no_ktsan(&kt_rh_pc_ring_misses, 0),

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
-obj-y := access.o 		\
+obj-y := c_smc_log.o access.o 		\
 	 cache.o 		\
 	 c_smc_analysis.o 	\
 	 c_smc_minimal.o 	\
@@ -126,3 +126,7 @@ KTSAN_SANITIZE_c_smc_watchpoint_targets.o := n
 KTSAN_SANITIZE_tests_inst.o = y
 KTSAN_SANITIZE_tests_inst_full.o = y
 KCOV_INSTRUMENT := n
+
+CFLAGS_REMOVE_c_smc_log.o = -pg -O0 -O1 -O2
+CFLAGS_c_smc_log.o = -O3 -fomit-frame-pointer
+KTSAN_SANITIZE_c_smc_log.o := n
