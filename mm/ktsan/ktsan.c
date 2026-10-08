@@ -28,11 +28,9 @@ static inline kt_task_t *kt_current_task(void)
 
 #define DISABLE_INTERRUPTS(flags)                                              \
 	preempt_disable();                                                     \
-	flags = arch_local_irq_save();                                         \
-	stop_nmi() /**/
+	flags = arch_local_irq_save() /**/
 
 #define ENABLE_INTERRUPTS(flags)                                               \
-	restart_nmi();                                                         \
 	arch_local_irq_restore(flags);                                         \
 	preempt_enable() /**/
 
@@ -292,7 +290,7 @@ void ktsan_interrupt_enter(void)
 	 * and interrupt stacks together, we will have to constantly save new
 	 * stacks in stack depot.
 	 */
-	ENTER(KT_ENTER_NORMAL);
+	ENTER(KT_ENTER_DISABLED);
 	if (thr->interrupt_depth++ == 0)
 		kt_thr_interrupt(thr, pc, &thr->cpu->interrupted);
 	LEAVE();
@@ -300,7 +298,7 @@ void ktsan_interrupt_enter(void)
 
 void ktsan_interrupt_exit(void)
 {
-	ENTER(KT_ENTER_NORMAL);
+	ENTER(KT_ENTER_DISABLED);
 	if (--thr->interrupt_depth == 0)
 		kt_thr_resume(thr, pc, &thr->cpu->interrupted);
 	BUG_ON(thr->interrupt_depth < 0);

@@ -390,8 +390,10 @@ struct kt_interrupted_s {
 	kt_clk_t release_clk;
 	int release_active;
 	int read_disable_depth;
+	int event_disable_depth;
 	int report_disable_depth;
 	int preempt_disable_depth;
+	unsigned long irq_flags_before_disable;
 	struct list_head percpu_list;
 	uptr_t seqcount[6];
 	uptr_t seqcount_pc[6];

@@ -805,7 +805,9 @@ ENTRY(\sym)
 .Lcommon_\sym:
 	call	interrupt_entry
 	UNWIND_HINT_REGS indirect=1
+	KTSAN_INTERRUPT_ENTER
 	call	\do_sym	/* rdi points to pt_regs */
+	KTSAN_INTERRUPT_EXIT
 	jmp	ret_from_intr
 END(\sym)
 _ASM_NOKPROBE(\sym)

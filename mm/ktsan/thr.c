@@ -180,13 +180,8 @@ bool kt_thr_event_disable(kt_thr_t *thr, uptr_t pc, unsigned long *flags)
 	thr->event_disable_depth++;
 	BUG_ON(thr->event_disable_depth >= 3);
 
-	if (thr->event_disable_depth - 1 == 0) {
-		/* Disable interrupts as well. Otherwise all events
-		   that happen in interrupts will be ignored. */
+	if (thr->event_disable_depth == 1)
 		thr->irq_flags_before_disable = *flags;
-		/* Set all disabled in *flags. */
-		*flags = arch_local_irq_save();
-	}
 
 	return (thr->event_disable_depth - 1 == 0);
 }
@@ -206,12 +201,26 @@ bool kt_thr_event_enable(kt_thr_t *thr, uptr_t pc, unsigned long *flags)
 	thr->event_disable_depth--;
 	BUG_ON(thr->event_disable_depth < 0);
 
-	if (thr->event_disable_depth == 0) {
-		BUG_ON(!arch_irqs_disabled());
-		*flags = thr->irq_flags_before_disable;
-	}
-
 	return (thr->event_disable_depth == 0);
+}
+
+static void kt_thr_interrupt_event_state_save(kt_thr_t *thr,
+					      kt_interrupted_t *state)
+{
+	state->event_disable_depth = thr->event_disable_depth;
+	state->irq_flags_before_disable = thr->irq_flags_before_disable;
+	thr->event_disable_depth = 0;
+	thr->irq_flags_before_disable = 0;
+}
+
+static void kt_thr_interrupt_event_state_restore(kt_thr_t *thr,
+					         kt_interrupted_t *state)
+{
+	BUG_ON(thr->event_disable_depth);
+	thr->event_disable_depth = state->event_disable_depth;
+	thr->irq_flags_before_disable = state->irq_flags_before_disable;
+	state->event_disable_depth = 0;
+	state->irq_flags_before_disable = 0;
 }
 
 void kt_thr_report_disable(kt_thr_t *thr)
@@ -230,12 +239,7 @@ void kt_thr_interrupt(kt_thr_t *thr, uptr_t pc, kt_interrupted_t *state)
 	BUG_ON(state->thr != NULL);
 	state->thr = thr;
 
-	BUG_ON(thr->event_disable_depth);
-	/* FIXME: fails during boot.
-	 * How can we receive an interrupt when interrupts are disabled?
-	 * We probably miss some enable of interrupt.
-	 * BUG_ON(thr->irqs_disabled);
-	 */
+	kt_thr_interrupt_event_state_save(thr, state);
 
 	kt_stack_copy(&state->stack, &thr->stack);
 	kt_stack_init(&thr->stack);
@@ -315,6 +319,7 @@ void kt_thr_resume(kt_thr_t *thr, uptr_t pc, kt_interrupted_t *state)
 	thr->read_disable_depth = state->read_disable_depth;
 	thr->report_disable_depth = state->report_disable_depth;
 	thr->preempt_disable_depth = state->preempt_disable_depth;
+	kt_thr_interrupt_event_state_restore(thr, state);
 
 	kt_percpu_release(thr, pc);
 	list_replace_init(&state->percpu_list, &thr->percpu_list);
