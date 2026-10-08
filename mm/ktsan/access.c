@@ -153,6 +153,20 @@ extern bool is_ktsan_tracked(pid_t pid);
 
 #define PID_FILTER 1
 
+#define RH_KT_CLOCK_MODULO (1U << RH_KT_CLOCK_BITS)
+#define RH_KT_CLOCK_MASK (RH_KT_CLOCK_MODULO - 1)
+#define RH_KT_CLOCK_SIGN (RH_KT_CLOCK_MODULO >> 1)
+
+static __always_inline int kt_rh_epoch_diff(kt_thr_t *thr, kt_shadow_t old)
+{
+	u32 observed = (u32)kt_clk_get(&thr->clk, old.tid) & RH_KT_CLOCK_MASK;
+	u32 delta = (observed - (u32)old.clock) & RH_KT_CLOCK_MASK;
+
+	if (delta & RH_KT_CLOCK_SIGN)
+		return (int)delta - (int)RH_KT_CLOCK_MODULO;
+	return (int)delta;
+}
+
 static __always_inline bool ranges_intersect(int first_offset, int first_size,
 					     int second_offset, int second_size)
 {
@@ -289,7 +303,7 @@ static __always_inline bool update_one_shadow_slot(kt_thr_t *thr, uptr_t pc,
 		 */
 		kt_rh_shared_mem_access(thr, pc, addr, 1UL << value.size,
 					value.read, value.atomic, old,
-					(int)(value.clock - old.clock));
+					kt_rh_epoch_diff(thr, old));
 		kt_report_race(thr, &info);
 
 		return true;

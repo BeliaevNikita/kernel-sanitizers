@@ -485,6 +485,21 @@ int smc_watchpoint_an_init(struct smc_watchpoint_analysis *analysis)
 	return 0;
 }
 
+int smc_watchpoint_an_get_fitness_limit(
+	const struct smc_watchpoint_analysis *analysis)
+{
+	return analysis ? READ_ONCE(analysis->fitness_limit) : 0;
+}
+
+int smc_watchpoint_an_set_fitness_limit(
+	struct smc_watchpoint_analysis *analysis, int limit)
+{
+	if (!analysis || limit < 0)
+		return -EINVAL;
+	WRITE_ONCE(analysis->fitness_limit, limit);
+	return 0;
+}
+
 bool smc_watchpoint_an_local_transfer(
 	const struct smc_dynamic_analysis *base, const struct smc_event *event,
 	struct smc_local_state *local_state)
@@ -685,7 +700,8 @@ struct smc_wait_action *smc_watchpoint_an_transfer(
 		kfree(wp_local->postponed);
 		wp_local->postponed = NULL;
 		result = smc_watchpoint_global_state_add_if_empty(
-			&analysis->global_state, &postponed, true, handle->id);
+			&analysis->global_state, &postponed,
+			!(current->flags & PF_KTHREAD), handle->id);
 		if (result && result != (void *)SMC_WATCHPOINT_CONSUMED)
 			return smc_watchpoint_create_wait_action(analysis, handle,
 				result, mutable_target, &postponed);
@@ -714,6 +730,8 @@ struct smc_wait_action *smc_watchpoint_an_transfer(
 	if (should_set && wp_local &&
 	    smc_watchpoint_local_state_is_access_covered(wp_local,
 		event->data.mem_access.pc, target_state))
+		should_set = false;
+	if (current->flags & PF_KTHREAD)
 		should_set = false;
 	if (should_set && wp_local &&
 	    (event->data.mem_access.typ == SMC_ACCESS_IMITATE || analysis->weak_mem)) {

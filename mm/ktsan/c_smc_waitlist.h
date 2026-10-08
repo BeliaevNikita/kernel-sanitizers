@@ -32,7 +32,9 @@ struct smc_dfs_waitlist {
 };
 
 struct smc_target_difference_waitlist {
-	struct smc_partitioned_waitlist partitioned;
+	struct smc_dfs_waitlist buckets[SMC_WAITLIST_KEYS];
+	u64 queued[SMC_WAITLIST_KEYS];
+	u64 selected[SMC_WAITLIST_KEYS];
 };
 
 struct smc_default_reached {
@@ -72,6 +74,7 @@ struct smc_target *smc_waitlist_get_next(struct smc_waitlist *waitlist);
 bool smc_waitlist_add(struct smc_waitlist *waitlist,
 		      struct smc_target *target);
 unsigned int smc_waitlist_size(const struct smc_waitlist *waitlist);
+void smc_waitlist_print_and_reset_statistics(struct smc_waitlist *waitlist);
 void smc_waitlist_serialize(const struct smc_waitlist *waitlist,
 			    struct smc_serializer *ser);
 int smc_waitlist_serialize_wrapper(const struct smc_waitlist *waitlist,

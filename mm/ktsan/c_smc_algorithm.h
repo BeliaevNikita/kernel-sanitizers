@@ -25,6 +25,12 @@ enum smc_iteration_phase {
 	SMC_PHASE_TARGET,
 	SMC_PHASE_FINISHING,
 	SMC_PHASE_COMPLETE,
+	SMC_PHASE_COUNT,
+};
+
+enum smc_drop_kind {
+	SMC_DROP_COMPLETION = SMC_EVENT_TYPE_COUNT,
+	SMC_DROP_KIND_COUNT,
 };
 
 enum smc_iteration_result {
@@ -35,6 +41,7 @@ enum smc_iteration_result {
 	SMC_ITERATION_TIMEOUT,
 	SMC_ITERATION_EVENT_LIMIT,
 	SMC_ITERATION_ABORTED,
+	SMC_ITERATION_CONTENDED,
 };
 
 struct smc_bitmap_pair {
@@ -67,6 +74,19 @@ struct smc_dynamic_algorithm {
 	bool restart_required;
 	bool stop_requested;
 	atomic_t active_events;
+	struct list_head pending_waits;
+	u64 waits_executed;
+	u64 waits_cancelled;
+	u64 duplicate_targets;
+	u64 target_insert_failures;
+	u64 dropped_events;
+	u64 dropped_events_start;
+	u64 iteration_dropped_events;
+	u64 event_attempts;
+	u64 event_attempts_start;
+	u64 iteration_event_attempts;
+	u64 iteration_dropped_by_phase[SMC_PHASE_COUNT];
+	u64 iteration_dropped_by_type[SMC_DROP_KIND_COUNT];
 	wait_queue_head_t quiescent_waitq;
 	int reached_targets;
 	int feasible_targets;
@@ -113,6 +133,10 @@ enum smc_iteration_result smc_alg_finish_iteration(
 	struct smc_algorithm *algorithm);
 enum smc_iteration_phase smc_alg_get_phase(struct smc_algorithm *algorithm);
 bool smc_alg_restart_required(struct smc_algorithm *algorithm);
+enum smc_waitlist_type smc_alg_get_waitlist_type(
+	struct smc_algorithm *algorithm);
+int smc_alg_set_waitlist_type(struct smc_algorithm *algorithm,
+			      enum smc_waitlist_type type);
 
 void smc_dyn_alg_init(struct smc_dynamic_algorithm *algorithm,
 				struct smc_dynamic_analysis *analysis);

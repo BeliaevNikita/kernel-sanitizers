@@ -37,6 +37,7 @@ enum smc_event_type {
 	SMC_FUNCTION_EXIT_TYPE,
 	SMC_FENCE_TYPE,
 	SMC_PRELOCK_TYPE,
+	SMC_EVENT_TYPE_COUNT,
 };
 
 struct smc_sync_event {

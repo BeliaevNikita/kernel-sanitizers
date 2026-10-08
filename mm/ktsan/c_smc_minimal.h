@@ -3,6 +3,7 @@
 
 #include <linux/atomic.h>
 #include <linux/types.h>
+#include <linux/list.h>
 
 struct smc_event;
 struct smc_algorithm;
@@ -16,6 +17,7 @@ struct smc_thread_handle {
 	void *thread;
 	struct smc_local_state *local_state;
 	u32 local_state_generation;
+	struct list_head pending_wait_node;
 	struct smc_wait_action *pending_wait_action;
 	struct smc_dynamic_algorithm *pending_wait_algorithm;
 };

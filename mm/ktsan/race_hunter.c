@@ -315,7 +315,7 @@ void kt_rh_test_shared_mem_access(kt_thr_t *thr, uptr_t prev_pc,
 
 void kt_rh_safe_point(kt_thr_t *thr)
 {
-	if (!thr || !thr->smc_handle || !thr->smc_handle->pending_wait_action)
+	if (!thr || !thr->smc_handle || !READ_ONCE(thr->smc_handle->pending_wait_action))
 		return;
 	if (thr->inside || thr->smc_inside || thr->event_disable_depth ||
 	    thr->interrupt_depth || in_interrupt() || irqs_disabled() ||

@@ -123,6 +123,10 @@ struct smc_watchpoint_analysis {
 int smc_watchpoint_an_init(struct smc_watchpoint_analysis *analysis);
 void smc_watchpoint_an_destroy(struct smc_dynamic_analysis *analysis);
 void smc_watchpoint_an_cancel_waits(struct smc_watchpoint_analysis *analysis);
+int smc_watchpoint_an_get_fitness_limit(
+	const struct smc_watchpoint_analysis *analysis);
+int smc_watchpoint_an_set_fitness_limit(
+	struct smc_watchpoint_analysis *analysis, int limit);
 
 void smc_init_watchpoint_thread_locals(void);
 bool smc_watchpoint_an_local_transfer(
