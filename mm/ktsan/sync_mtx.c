@@ -26,18 +26,16 @@ void kt_mtx_post_lock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr, bool try,
 	if (!success)
 		return;
 
+	kt_access(thr, pc, addr, KT_ACCESS_SIZE_1, true, false);
+
 	sync = kt_sync_ensure_created(thr, pc, addr);
 	if (!sync)
 		return;
 
-	/* This can catch unsafe publication of a mutex. */
-	kt_access(thr, pc, addr, KT_ACCESS_SIZE_1, true, false);
 
 	kt_mutex_lock(thr, pc, sync->uid, wr);
 
 	kt_acquire(thr, pc, sync);
-	/* RACE HUNTER: lock acquisition is a synchronization fence. */
-	kt_rh_fence(thr, pc);
 
 	BUG_ON(sync->lock_tid != -1);
 	if (wr)
@@ -45,24 +43,23 @@ void kt_mtx_post_lock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr, bool try,
 	sync->last_lock_time = kt_clk_get(&thr->clk, thr->id);
 
 	kt_spin_unlock(&sync->tab.lock);
+	kt_rh_fence(thr, pc);
 }
 
 void kt_mtx_pre_unlock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr)
 {
 	kt_tab_sync_t *sync;
 
+	kt_access(thr, pc, addr, KT_ACCESS_SIZE_1, true, false);
+
 	sync = kt_sync_ensure_created(thr, pc, addr);
 	if (!sync)
 		return;
 
-	/* This can catch race between unlock and mutex destruction. */
-	kt_access(thr, pc, addr, KT_ACCESS_SIZE_1, true, false);
 
 	kt_mutex_unlock(thr, sync->uid, wr);
 
 	kt_release(thr, pc, sync);
-	/* RACE HUNTER: unlock release is a synchronization fence. */
-	kt_rh_fence(thr, pc);
 
 	if (wr) {
 		BUG_ON(sync->lock_tid == -1);
@@ -74,6 +71,7 @@ void kt_mtx_pre_unlock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr)
 	sync->last_unlock_time = kt_clk_get(&thr->clk, thr->id);
 
 	kt_spin_unlock(&sync->tab.lock);
+	kt_rh_fence(thr, pc);
 }
 
 void kt_mtx_post_unlock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr)
